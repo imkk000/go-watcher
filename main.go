@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -23,6 +24,7 @@ var (
 	ignoreRegex   *regexp.Regexp
 	allowExtRegex *regexp.Regexp
 	runCmd        *exec.Cmd
+	isClearScreen bool
 )
 
 func main() {
@@ -54,17 +56,12 @@ func main() {
 				Value:   1,
 				Usage:   "Set the log level (0: DEBUG, 1: INFO)",
 			},
-			&cli.StringFlag{
-				Aliases: []string{"i"},
-				Name:    "ignore",
-				Value:   "(.git|.DS_Store|.idea|.vscode|node_modules)",
-				Usage:   "Set ignore regex for directories",
-			},
-			&cli.StringFlag{
-				Aliases: []string{"e"},
-				Name:    "extension",
-				Value:   "^(.go|.env)$",
-				Usage:   "Set allow extensions",
+			&cli.BoolFlag{
+				Aliases:     []string{"c"},
+				Name:        "clear-screen",
+				Value:       false,
+				Usage:       "Clear the terminal screen before running commands",
+				Destination: &isClearScreen,
 			},
 		},
 		Before: func(ctx context.Context, cmd *cli.Command) (context.Context, error) {
@@ -72,38 +69,59 @@ func main() {
 			zerolog.SetGlobalLevel(level)
 			log.Debug().Str("log_level", level.String()).Msg("set log level")
 
-			regex, err := regexp.Compile(cmd.String("ignore"))
-			if err != nil {
-				return nil, cli.Exit("invalid ignore regex", 1)
-			}
-			ignoreRegex = regex
-			log.Debug().Msg("compile ignore regex")
-
-			regex, err = regexp.Compile(cmd.String("extension"))
-			if err != nil {
-				return nil, cli.Exit("invalid extension regex", 1)
-			}
-			allowExtRegex = regex
-			log.Debug().Msg("compile extension regex")
-
 			return ctx, nil
 		},
 		Commands: []*cli.Command{
 			{
-				Name: "watch",
+				Aliases: []string{"cmd"},
+				Name:    "command",
+				Flags: []cli.Flag{
+					&cli.DurationFlag{
+						Aliases: []string{"n", "d"},
+						Name:    "duration",
+						Value:   time.Second,
+						Usage:   "Set duration for the command to run",
+					},
+				},
+				Action: newCommandAction,
+			},
+			{
+				Aliases: []string{"fs"},
+				Name:    "file",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Aliases: []string{"i"},
+						Name:    "ignore",
+						Value:   ".git,.DS_Store,.idea,.vscode,node_modules,",
+						Usage:   "Set ignore regex for directories",
+					},
+					&cli.StringFlag{
+						Aliases: []string{"e"},
+						Name:    "extension",
+						Value:   ".go,.env",
+						Usage:   "Set allow extensions",
+					},
+				},
 				Before: func(ctx context.Context, cmd *cli.Command) (context.Context, error) {
+					raw := cmd.String("ignore")
+					regex, err := regexp.Compile(buildRegExpr(raw))
+					if err != nil {
+						return nil, cli.Exit("invalid ignore regex", 1)
+					}
+					ignoreRegex = regex
+					log.Debug().Str("raw", raw).Msg("compile ignore regex")
+
+					raw = cmd.String("extension")
+					regex, err = regexp.Compile(buildRegExpr(raw))
+					if err != nil {
+						return nil, cli.Exit("invalid extension regex", 1)
+					}
+					allowExtRegex = regex
+					log.Debug().Str("raw", raw).Msg("compile extension regex")
+
 					return ctx, nil
 				},
-				Action: func(ctx context.Context, cmd *cli.Command) error {
-					args := cmd.Args()
-					if args.Len() == 0 {
-						return cli.Exit("no command provided to watch", 1)
-					}
-					log.Info().Strs("cmd", args.Slice()).Msgf("watching command")
-
-					action := wrapAction(args.First(), args.Tail()...)
-					return action(ctx, cmd)
-				},
+				Action: newFileAction,
 			},
 		},
 	}
@@ -127,10 +145,55 @@ func main() {
 	}
 }
 
+func newCommandAction(ctx context.Context, cmd *cli.Command) error {
+	args := cmd.Args()
+	if args.Len() == 0 {
+		return cli.Exit("no command provided to watch", 1)
+	}
+	log.Info().Strs("cmd", args.Slice()).Msgf("watching command")
+
+	d := cmd.Duration("duration")
+	ticker := time.NewTicker(d)
+	defer ticker.Stop()
+
+	runCommand := func() {
+		cmd := exec.Command(args.First(), args.Tail()...)
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stdout
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if err := cmd.Run(); err != nil {
+			log.Error().Err(err).Msg("run command")
+		}
+	}
+	runCommand()
+
+	for range ticker.C {
+		log.Info().Msgf("running command every %s\n", d)
+
+		runCommand()
+	}
+
+	return nil
+}
+
+func newFileAction(ctx context.Context, cmd *cli.Command) error {
+	args := cmd.Args()
+	if args.Len() == 0 {
+		return cli.Exit("no command provided to watch", 1)
+	}
+	log.Info().Strs("cmd", args.Slice()).Msgf("watching command")
+
+	action := wrapAction(args.First(), args.Tail()...)
+	return action(ctx, cmd)
+}
+
 func wrapAction(name string, args ...string) cli.ActionFunc {
 	return func(_ context.Context, cmd *cli.Command) error {
 		go reapZombieProcesses()
 		go runWatcher(name, args...)
+
+		runCmd = startCommand(name, args...)
 
 		sig := make(chan os.Signal, 1)
 		defer close(sig)
@@ -205,6 +268,9 @@ func runWatcher(name string, args ...string) {
 				debouncer.Stop()
 			}
 			debouncer = time.AfterFunc(100*time.Millisecond, func() {
+				if isClearScreen {
+					clearScreen()
+				}
 				if runCmd != nil {
 					if err := syscall.Kill(-runCmd.Process.Pid, syscall.SIGKILL); err != nil {
 						log.Debug().Err(err).Msg("kill previous process")
@@ -213,14 +279,7 @@ func runWatcher(name string, args ...string) {
 				}
 				log.Info().Msg("reloading")
 
-				runCmd = exec.Command(name, args...)
-				runCmd.Stdin = os.Stdin
-				runCmd.Stdout = os.Stdout
-				runCmd.Stderr = os.Stdout
-				runCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-				if err := runCmd.Start(); err != nil {
-					log.Error().Err(err).Msg("start command")
-				}
+				runCmd = startCommand(name, args...)
 			})
 		case err, ok := <-watcher.Errors:
 			if !ok {
@@ -256,4 +315,25 @@ func walkDir(path string, watcher *fsnotify.Watcher) error {
 		log.Debug().Str("path", path).Msg("add path")
 		return watcher.Add(path)
 	})
+}
+
+func buildRegExpr(expr string) string {
+	expr = strings.ReplaceAll(expr, ",", "|")
+	return fmt.Sprintf("^(%s)$", expr)
+}
+
+func startCommand(name string, args ...string) *exec.Cmd {
+	cmd := exec.Command(name, args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stdout
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		log.Error().Err(err).Msg("run command")
+	}
+	return cmd
+}
+
+func clearScreen() {
+	fmt.Print("\033[H\033[2J")
 }
