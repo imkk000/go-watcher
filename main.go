@@ -92,7 +92,7 @@ func main() {
 					&cli.StringFlag{
 						Aliases: []string{"i"},
 						Name:    "ignore",
-						Value:   ".git,.DS_Store,.idea,.vscode,node_modules,",
+						Value:   ".git,.DS_Store,.idea,.vscode,node_modules,script",
 						Usage:   "Set ignore regex for directories",
 					},
 					&cli.StringFlag{
@@ -104,7 +104,9 @@ func main() {
 				},
 				Before: func(ctx context.Context, cmd *cli.Command) (context.Context, error) {
 					raw := cmd.String("ignore")
-					regex, err := regexp.Compile(buildRegExpr(raw))
+					raw = strings.ReplaceAll(raw, ",", "|")
+					raw = fmt.Sprintf("(%s)", raw)
+					regex, err := regexp.Compile(raw)
 					if err != nil {
 						return nil, cli.Exit("invalid ignore regex", 1)
 					}
@@ -112,7 +114,9 @@ func main() {
 					log.Debug().Str("raw", raw).Msg("compile ignore regex")
 
 					raw = cmd.String("extension")
-					regex, err = regexp.Compile(buildRegExpr(raw))
+					raw = strings.ReplaceAll(raw, ",", "|")
+					raw = fmt.Sprintf("^(%s)$", raw)
+					regex, err = regexp.Compile(raw)
 					if err != nil {
 						return nil, cli.Exit("invalid extension regex", 1)
 					}
@@ -315,11 +319,6 @@ func walkDir(path string, watcher *fsnotify.Watcher) error {
 		log.Debug().Str("path", path).Msg("add path")
 		return watcher.Add(path)
 	})
-}
-
-func buildRegExpr(expr string) string {
-	expr = strings.ReplaceAll(expr, ",", "|")
-	return fmt.Sprintf("^(%s)$", expr)
 }
 
 func startCommand(name string, args ...string) *exec.Cmd {
