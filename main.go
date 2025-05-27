@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -14,7 +13,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/fatih/color"
 	"github.com/fsnotify/fsnotify"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -35,12 +33,15 @@ func main() {
 		NoColor:    false,
 		FormatLevel: func(l any) string {
 			if level, ok := l.(string); ok {
-				return strings.ToUpper(level)
+				return sprintRGB(102, 163, 255, strings.ToUpper(level))
 			}
 			return ""
 		},
 		FormatMessage: func(f any) string {
-			return color.YellowString(f.(string))
+			if msg, ok := f.(string); ok {
+				return sprintRGB(255, 192, 203, msg)
+			}
+			return ""
 		},
 	})
 
@@ -52,7 +53,7 @@ func main() {
 				Aliases: []string{"n", "d"},
 				Name:    "duration",
 				Value:   time.Second,
-				Usage:   "Set duration for the command to run",
+				Usage:   "set duration for the command to run",
 			},
 		},
 		Action: newCommandAction,
@@ -65,20 +66,20 @@ func main() {
 				Aliases:     []string{"o"},
 				Name:        "override-color",
 				Value:       true,
-				Usage:       "Override the default color for output",
+				Usage:       "override the default color for output",
 				Destination: &overrideColor,
 			},
 			&cli.StringFlag{
 				Aliases: []string{"i"},
 				Name:    "ignore",
 				Value:   ".git,.DS_Store,.idea,.vscode,node_modules,script",
-				Usage:   "Set ignore regex for directories",
+				Usage:   "set ignore regex for directories",
 			},
 			&cli.StringFlag{
 				Aliases: []string{"e"},
 				Name:    "extension",
 				Value:   ".go,.env",
-				Usage:   "Set allow extensions",
+				Usage:   "set allow extensions",
 			},
 		},
 		Before: func(ctx context.Context, cmd *cli.Command) (context.Context, error) {
@@ -107,9 +108,9 @@ func main() {
 		Action: newFileAction,
 	}
 	cmds := map[string]string{
-		"run":  "go run cmd/main.go",
-		"lint": "golangci-lint run --config=~/.config/nvim/linters/golangci.yaml --output.tab.path stdout",
-		"test": "go test ./...",
+		"gorun":  "go run cmd/main.go",
+		"golint": "golangci-lint run --config=~/.config/nvim/linters/golangci.yaml --output.tab.path stdout",
+		"gotest": "go test ./...",
 	}
 	for name, cmd := range cmds {
 		fields := strings.Fields(cmd)
@@ -132,7 +133,7 @@ func main() {
 				Aliases: []string{"l"},
 				Name:    "log-level",
 				Value:   1,
-				Usage:   "Set the log level (0: DEBUG, 1: INFO)",
+				Usage:   "set the log level (0: DEBUG, 1: INFO)",
 			},
 		},
 		Before: func(ctx context.Context, cmd *cli.Command) (context.Context, error) {
@@ -305,7 +306,7 @@ func reapZombieProcesses() {
 			log.Error().Err(err).Msg("wait for child process")
 			continue
 		}
-		log.Debug().Msgf("reaped zombie process (%d)", pid)
+		log.Info().Msgf("reaped zombie process (%d)", pid)
 	}
 }
 
@@ -325,7 +326,7 @@ func startCommand(name string, args ...string) *exec.Cmd {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stdout
 	if overrideColor {
-		stdout := NewColoredWriter(os.Stdout, "\033[33m")
+		stdout := NewColoredWriter(os.Stdout, rgb(255, 219, 153))
 		cmd.Stdout = stdout
 		cmd.Stderr = stdout
 	}
@@ -337,31 +338,5 @@ func startCommand(name string, args ...string) *exec.Cmd {
 }
 
 func clearScreen() {
-	fmt.Print("\033[H\033[2J")
-}
-
-type ColoredWriter struct {
-	writer io.Writer
-	color  []byte
-	reset  []byte
-}
-
-func NewColoredWriter(w io.Writer, color string) ColoredWriter {
-	return ColoredWriter{
-		writer: w,
-		color:  []byte(color),
-		reset:  []byte("\033[0m"),
-	}
-}
-
-func (w ColoredWriter) Write(p []byte) (n int, err error) {
-	n, err = w.writer.Write(w.color)
-	if err != nil {
-		return
-	}
-	n, err = w.writer.Write(p)
-	if err != nil {
-		return
-	}
-	return w.writer.Write(w.reset)
+	fmt.Print(ClearScreen)
 }
