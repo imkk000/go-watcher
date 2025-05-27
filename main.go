@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -24,7 +25,7 @@ var (
 	ignoreRegex   *regexp.Regexp
 	allowExtRegex *regexp.Regexp
 	runCmd        *exec.Cmd
-	isClearScreen bool
+	overrideColor bool
 )
 
 func main() {
@@ -43,8 +44,85 @@ func main() {
 		},
 	})
 
+	commandCmd := &cli.Command{
+		Aliases: []string{"cmd"},
+		Name:    "command",
+		Flags: []cli.Flag{
+			&cli.DurationFlag{
+				Aliases: []string{"n", "d"},
+				Name:    "duration",
+				Value:   time.Second,
+				Usage:   "Set duration for the command to run",
+			},
+		},
+		Action: newCommandAction,
+	}
+	fileCmd := &cli.Command{
+		Aliases: []string{"fs"},
+		Name:    "file",
+		Flags: []cli.Flag{
+			&cli.BoolFlag{
+				Aliases:     []string{"o"},
+				Name:        "override-color",
+				Value:       true,
+				Usage:       "Override the default color for output",
+				Destination: &overrideColor,
+			},
+			&cli.StringFlag{
+				Aliases: []string{"i"},
+				Name:    "ignore",
+				Value:   ".git,.DS_Store,.idea,.vscode,node_modules,script",
+				Usage:   "Set ignore regex for directories",
+			},
+			&cli.StringFlag{
+				Aliases: []string{"e"},
+				Name:    "extension",
+				Value:   ".go,.env",
+				Usage:   "Set allow extensions",
+			},
+		},
+		Before: func(ctx context.Context, cmd *cli.Command) (context.Context, error) {
+			raw := cmd.String("ignore")
+			raw = strings.ReplaceAll(raw, ",", "|")
+			raw = fmt.Sprintf("(%s)", raw)
+			regex, err := regexp.Compile(raw)
+			if err != nil {
+				return nil, cli.Exit("invalid ignore regex", 1)
+			}
+			ignoreRegex = regex
+			log.Debug().Str("raw", raw).Msg("compile ignore regex")
+
+			raw = cmd.String("extension")
+			raw = strings.ReplaceAll(raw, ",", "|")
+			raw = fmt.Sprintf("^(%s)$", raw)
+			regex, err = regexp.Compile(raw)
+			if err != nil {
+				return nil, cli.Exit("invalid extension regex", 1)
+			}
+			allowExtRegex = regex
+			log.Debug().Str("raw", raw).Msg("compile extension regex")
+
+			return ctx, nil
+		},
+		Action: newFileAction,
+	}
+	cmds := map[string]string{
+		"run":  "go run cmd/main.go",
+		"lint": "golangci-lint run --config=~/.config/nvim/linters/golangci.yaml --output.tab.path stdout",
+		"test": "go test ./...",
+	}
+	for name, cmd := range cmds {
+		fields := strings.Fields(cmd)
+		wrapAction := wrapAction(fields[0], fields[1:]...)
+		fileCmd.Commands = append(fileCmd.Commands, &cli.Command{
+			Name:                  name,
+			EnableShellCompletion: true,
+			Action:                wrapAction,
+		})
+	}
+
 	rootCmd := &cli.Command{
-		Version:                "0.0.1",
+		Version:                "0.0.2",
 		EnableShellCompletion:  true,
 		UseShortOptionHandling: true,
 		ExitErrHandler: func(ctx context.Context, c *cli.Command, err error) {
@@ -56,13 +134,6 @@ func main() {
 				Value:   1,
 				Usage:   "Set the log level (0: DEBUG, 1: INFO)",
 			},
-			&cli.BoolFlag{
-				Aliases:     []string{"c"},
-				Name:        "clear-screen",
-				Value:       false,
-				Usage:       "Clear the terminal screen before running commands",
-				Destination: &isClearScreen,
-			},
 		},
 		Before: func(ctx context.Context, cmd *cli.Command) (context.Context, error) {
 			level := zerolog.Level(cmd.Int8("log-level"))
@@ -71,78 +142,7 @@ func main() {
 
 			return ctx, nil
 		},
-		Commands: []*cli.Command{
-			{
-				Aliases: []string{"cmd"},
-				Name:    "command",
-				Flags: []cli.Flag{
-					&cli.DurationFlag{
-						Aliases: []string{"n", "d"},
-						Name:    "duration",
-						Value:   time.Second,
-						Usage:   "Set duration for the command to run",
-					},
-				},
-				Action: newCommandAction,
-			},
-			{
-				Aliases: []string{"fs"},
-				Name:    "file",
-				Flags: []cli.Flag{
-					&cli.StringFlag{
-						Aliases: []string{"i"},
-						Name:    "ignore",
-						Value:   ".git,.DS_Store,.idea,.vscode,node_modules,script",
-						Usage:   "Set ignore regex for directories",
-					},
-					&cli.StringFlag{
-						Aliases: []string{"e"},
-						Name:    "extension",
-						Value:   ".go,.env",
-						Usage:   "Set allow extensions",
-					},
-				},
-				Before: func(ctx context.Context, cmd *cli.Command) (context.Context, error) {
-					raw := cmd.String("ignore")
-					raw = strings.ReplaceAll(raw, ",", "|")
-					raw = fmt.Sprintf("(%s)", raw)
-					regex, err := regexp.Compile(raw)
-					if err != nil {
-						return nil, cli.Exit("invalid ignore regex", 1)
-					}
-					ignoreRegex = regex
-					log.Debug().Str("raw", raw).Msg("compile ignore regex")
-
-					raw = cmd.String("extension")
-					raw = strings.ReplaceAll(raw, ",", "|")
-					raw = fmt.Sprintf("^(%s)$", raw)
-					regex, err = regexp.Compile(raw)
-					if err != nil {
-						return nil, cli.Exit("invalid extension regex", 1)
-					}
-					allowExtRegex = regex
-					log.Debug().Str("raw", raw).Msg("compile extension regex")
-
-					return ctx, nil
-				},
-				Action: newFileAction,
-			},
-		},
-	}
-
-	cmds := map[string]string{
-		"run":  "go run cmd/main.go",
-		"lint": "golangci-lint run --config=~/.config/nvim/linters/golangci.yaml",
-		"test": "go test ./...",
-	}
-	for name, cmd := range cmds {
-		fields := strings.Fields(cmd)
-		wrapAction := wrapAction(fields[0], fields[1:]...)
-		rootCmd.Commands = append(rootCmd.Commands, &cli.Command{
-			Name:                  name,
-			EnableShellCompletion: true,
-			Action:                wrapAction,
-		})
+		Commands: []*cli.Command{commandCmd, fileCmd},
 	}
 	if err := rootCmd.Run(context.Background(), os.Args); err != nil {
 		log.Fatal().Err(err).Msg("run application")
@@ -173,8 +173,9 @@ func newCommandAction(ctx context.Context, cmd *cli.Command) error {
 	runCommand()
 
 	for range ticker.C {
-		log.Info().Msgf("running command every %s\n", d)
+		clearScreen()
 
+		log.Info().Msgf("running command every %s\n", d)
 		runCommand()
 	}
 
@@ -272,9 +273,6 @@ func runWatcher(name string, args ...string) {
 				debouncer.Stop()
 			}
 			debouncer = time.AfterFunc(100*time.Millisecond, func() {
-				if isClearScreen {
-					clearScreen()
-				}
 				if runCmd != nil {
 					if err := syscall.Kill(-runCmd.Process.Pid, syscall.SIGKILL); err != nil {
 						log.Debug().Err(err).Msg("kill previous process")
@@ -307,7 +305,7 @@ func reapZombieProcesses() {
 			log.Error().Err(err).Msg("wait for child process")
 			continue
 		}
-		log.Info().Msgf("reaped zombie process (%d)", pid)
+		log.Debug().Msgf("reaped zombie process (%d)", pid)
 	}
 }
 
@@ -326,6 +324,11 @@ func startCommand(name string, args ...string) *exec.Cmd {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stdout
+	if overrideColor {
+		stdout := NewColoredWriter(os.Stdout, "\033[33m")
+		cmd.Stdout = stdout
+		cmd.Stderr = stdout
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		log.Error().Err(err).Msg("run command")
@@ -335,4 +338,30 @@ func startCommand(name string, args ...string) *exec.Cmd {
 
 func clearScreen() {
 	fmt.Print("\033[H\033[2J")
+}
+
+type ColoredWriter struct {
+	writer io.Writer
+	color  []byte
+	reset  []byte
+}
+
+func NewColoredWriter(w io.Writer, color string) ColoredWriter {
+	return ColoredWriter{
+		writer: w,
+		color:  []byte(color),
+		reset:  []byte("\033[0m"),
+	}
+}
+
+func (w ColoredWriter) Write(p []byte) (n int, err error) {
+	n, err = w.writer.Write(w.color)
+	if err != nil {
+		return
+	}
+	n, err = w.writer.Write(p)
+	if err != nil {
+		return
+	}
+	return w.writer.Write(w.reset)
 }
