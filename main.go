@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -20,19 +21,34 @@ import (
 )
 
 var (
+	appVersion    = "0.0.3"
 	ignoreRegex   *regexp.Regexp
 	allowExtRegex *regexp.Regexp
 	runCmd        *exec.Cmd
-	overrideColor bool
 )
 
 func main() {
+	defer func() {
+		if err := recover(); err != nil {
+			log.Panic().Err(err.(error)).Msg("application panic")
+			if runCmd != nil {
+				killCommand(runCmd)
+			}
+			os.Exit(1)
+		}
+	}()
 	log.Logger = log.Output(zerolog.ConsoleWriter{
-		Out:        os.Stdout,
-		TimeFormat: time.Kitchen,
-		NoColor:    false,
+		Out:     os.Stdout,
+		NoColor: false,
+		FormatTimestamp: func(_ any) string {
+			return ""
+		},
 		FormatLevel: func(l any) string {
 			if level, ok := l.(string); ok {
+				switch level {
+				case zerolog.LevelErrorValue, zerolog.LevelFatalValue, zerolog.LevelPanicValue:
+					return sprintRGB(255, 0, 0, strings.ToUpper(level))
+				}
 				return sprintRGB(102, 163, 255, strings.ToUpper(level))
 			}
 			return ""
@@ -62,43 +78,39 @@ func main() {
 		Aliases: []string{"fs"},
 		Name:    "file",
 		Flags: []cli.Flag{
-			&cli.BoolFlag{
-				Aliases:     []string{"o"},
-				Name:        "override-color",
-				Value:       true,
-				Usage:       "override the default color for output",
-				Destination: &overrideColor,
-			},
-			&cli.StringFlag{
+			&cli.StringSliceFlag{
 				Aliases: []string{"i"},
-				Name:    "ignore",
-				Value:   ".git,.DS_Store,.idea,.vscode,node_modules,script",
-				Usage:   "set ignore regex for directories",
+				Name:    "ignore-dirs",
+				Value:   []string{".git", ".DS_Store", ".idea", ".vscode", "node_modules", "script"},
+				Usage:   "set ignore directories pattern",
 			},
-			&cli.StringFlag{
+			&cli.StringSliceFlag{
 				Aliases: []string{"e"},
 				Name:    "extension",
-				Value:   ".go,.env",
-				Usage:   "set allow extensions",
+				Value:   []string{".go", ".env"},
+				Usage:   "set allow file extensions",
 			},
 		},
 		Before: func(ctx context.Context, cmd *cli.Command) (context.Context, error) {
-			raw := cmd.String("ignore")
+			ignoreDirs := cmd.StringSlice("ignore-dirs")
+			extensions := cmd.StringSlice("extension")
+
+			raw := strings.Join(ignoreDirs, "|")
 			raw = strings.ReplaceAll(raw, ",", "|")
 			raw = fmt.Sprintf("(%s)", raw)
 			regex, err := regexp.Compile(raw)
 			if err != nil {
-				return nil, cli.Exit("invalid ignore regex", 1)
+				return nil, cli.Exit("invalid ignore directories regex", 1)
 			}
 			ignoreRegex = regex
 			log.Debug().Str("raw", raw).Msg("compile ignore regex")
 
-			raw = cmd.String("extension")
+			raw = strings.Join(extensions, "|")
 			raw = strings.ReplaceAll(raw, ",", "|")
 			raw = fmt.Sprintf("^(%s)$", raw)
 			regex, err = regexp.Compile(raw)
 			if err != nil {
-				return nil, cli.Exit("invalid extension regex", 1)
+				return nil, cli.Exit("invalid file extensions regex", 1)
 			}
 			allowExtRegex = regex
 			log.Debug().Str("raw", raw).Msg("compile extension regex")
@@ -123,7 +135,7 @@ func main() {
 	}
 
 	rootCmd := &cli.Command{
-		Version:                "0.0.2",
+		Version:                appVersion,
 		EnableShellCompletion:  true,
 		UseShortOptionHandling: true,
 		ExitErrHandler: func(ctx context.Context, c *cli.Command, err error) {
@@ -157,28 +169,41 @@ func newCommandAction(ctx context.Context, cmd *cli.Command) error {
 	}
 	log.Info().Strs("cmd", args.Slice()).Msgf("watching command")
 
+	go reapZombieProcesses()
+
 	d := cmd.Duration("duration")
 	ticker := time.NewTicker(d)
 	defer ticker.Stop()
 
-	runCommand := func() {
+	runCommand := func() *exec.Cmd {
 		cmd := exec.Command(args.First(), args.Tail()...)
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stdout
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		runCmd = cmd
 		if err := cmd.Run(); err != nil {
 			log.Error().Err(err).Msg("run command")
 		}
+		return cmd
 	}
-	runCommand()
+	runCmd := runCommand()
 
-	for range ticker.C {
-		clearScreen()
+	go func() {
+		for range ticker.C {
+			clearScreen()
 
-		log.Info().Msgf("running command every %s\n", d)
-		runCommand()
-	}
+			log.Info().Msgf("running command every %s\n", d)
+			runCmd = runCommand()
+		}
+	}()
+
+	sig := make(chan os.Signal, 1)
+	defer close(sig)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	<-sig
+
+	killCommand(runCmd)
 
 	return nil
 }
@@ -199,21 +224,14 @@ func wrapAction(name string, args ...string) cli.ActionFunc {
 		go reapZombieProcesses()
 		go runWatcher(name, args...)
 
-		runCmd = startCommand(name, args...)
+		runCmd = startCommand(runCmd, name, args...)
 
 		sig := make(chan os.Signal, 1)
 		defer close(sig)
 		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 		<-sig
 
-		if runCmd != nil {
-			if err := syscall.Kill(-runCmd.Process.Pid, syscall.SIGKILL); err != nil {
-				log.Error().Err(err).Msg("kill process")
-			}
-			if err := runCmd.Wait(); err != nil {
-				log.Error().Err(err).Msg("wait to finish process")
-			}
-		}
+		killCommand(runCmd)
 
 		return nil
 	}
@@ -273,16 +291,8 @@ func runWatcher(name string, args ...string) {
 			if debouncer != nil {
 				debouncer.Stop()
 			}
-			debouncer = time.AfterFunc(100*time.Millisecond, func() {
-				if runCmd != nil {
-					if err := syscall.Kill(-runCmd.Process.Pid, syscall.SIGKILL); err != nil {
-						log.Debug().Err(err).Msg("kill previous process")
-					}
-					log.Info().Msgf("killing (%d)", runCmd.Process.Pid)
-				}
-				log.Info().Msg("reloading")
-
-				runCmd = startCommand(name, args...)
+			debouncer = time.AfterFunc(500*time.Millisecond, func() {
+				runCmd = startCommand(runCmd, name, args...)
 			})
 		case err, ok := <-watcher.Errors:
 			if !ok {
@@ -291,22 +301,6 @@ func runWatcher(name string, args ...string) {
 			}
 			log.Error().Err(err).Msg("received error")
 		}
-	}
-}
-
-func reapZombieProcesses() {
-	ch := make(chan os.Signal, 1)
-	defer close(ch)
-	signal.Notify(ch, syscall.SIGCHLD)
-
-	var status syscall.WaitStatus
-	for range ch {
-		pid, err := syscall.Wait4(-1, &status, syscall.WNOHANG, nil)
-		if err != nil {
-			log.Error().Err(err).Msg("wait for child process")
-			continue
-		}
-		log.Info().Msgf("reaped zombie process (%d)", pid)
 	}
 }
 
@@ -320,21 +314,53 @@ func walkDir(path string, watcher *fsnotify.Watcher) error {
 	})
 }
 
-func startCommand(name string, args ...string) *exec.Cmd {
-	cmd := exec.Command(name, args...)
+func startCommand(cmd *exec.Cmd, name string, args ...string) *exec.Cmd {
+	log.Info().Msg("reloading")
+	killCommand(cmd)
+
+	stdout := NewColoredWriter(os.Stdout, rgb(255, 219, 153))
+	cmd = exec.Command(name, args...)
 	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stdout
-	if overrideColor {
-		stdout := NewColoredWriter(os.Stdout, rgb(255, 219, 153))
-		cmd.Stdout = stdout
-		cmd.Stderr = stdout
-	}
+	cmd.Stdout = stdout
+	cmd.Stderr = stdout
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		log.Error().Err(err).Msg("run command")
 	}
+	log.Info().Msgf("started (%d)", cmd.Process.Pid)
+
 	return cmd
+}
+
+func killCommand(cmd *exec.Cmd) {
+	if cmd != nil {
+		log.Info().Msgf("killing (%d)", cmd.Process.Pid)
+		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
+			log.Debug().Err(err).Msg("kill previous process")
+		}
+		if err := cmd.Wait(); err != nil {
+			log.Debug().Err(err).Msg("wait to finish process")
+		}
+	}
+}
+
+func reapZombieProcesses() {
+	ch := make(chan os.Signal, 1)
+	defer close(ch)
+	signal.Notify(ch, syscall.SIGCHLD)
+
+	var status syscall.WaitStatus
+	for range ch {
+		pid, err := syscall.Wait4(-1, &status, syscall.WNOHANG, nil)
+		if err != nil {
+			if errors.Is(err, syscall.ECHILD) {
+				continue
+			}
+			log.Error().Err(err).Msg("wait for child process")
+			continue
+		}
+		log.Debug().Msgf("reaped zombie process (%d)", pid)
+	}
 }
 
 func clearScreen() {
