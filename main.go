@@ -327,7 +327,7 @@ func walkDir(path string, watcher *fsnotify.Watcher) error {
 		if !d.IsDir() {
 			return nil
 		}
-		if !includeRegex.MatchString(strings.ToLower(path)) &&
+		if !includeRegex.MatchString(strings.ToLower(path)) ||
 			excludeRegex.MatchString(strings.ToLower(path)) {
 			return nil
 		}
