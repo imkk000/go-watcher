@@ -113,7 +113,7 @@ func main() {
 			excludeRegex = regex
 			log.Debug().Str("raw", raw).Msg("compile exclude regex")
 
-			raw = strings.Join(excludeDirs, "|")
+			raw = strings.Join(includeDirs, "|")
 			raw = strings.ReplaceAll(raw, ",", "|")
 			raw = fmt.Sprintf("(%s)", raw)
 			regex, err = regexp.Compile(raw)
