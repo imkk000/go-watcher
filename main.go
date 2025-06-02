@@ -21,8 +21,9 @@ import (
 )
 
 var (
-	appVersion    = "0.0.3"
-	ignoreRegex   *regexp.Regexp
+	appVersion    = "0.0.4"
+	excludeRegex  *regexp.Regexp
+	includeRegex  *regexp.Regexp
 	allowExtRegex *regexp.Regexp
 	runCmd        *exec.Cmd
 )
@@ -79,31 +80,48 @@ func main() {
 		Name:    "file",
 		Flags: []cli.Flag{
 			&cli.StringSliceFlag{
-				Aliases: []string{"i"},
-				Name:    "ignore-dirs",
+				Aliases: []string{"e"},
+				Name:    "exclude-dirs",
 				Value:   []string{".git", ".DS_Store", ".idea", ".vscode", "node_modules", "script"},
-				Usage:   "set ignore directories pattern",
+				Usage:   "set exclude directories pattern",
+			},
+			&cli.StringSliceFlag{
+				Aliases: []string{"i"},
+				Name:    "include-dirs",
+				Value:   []string{},
+				Usage:   "set include directories pattern",
 			},
 			&cli.StringSliceFlag{
 				Aliases: []string{"e"},
 				Name:    "extension",
-				Value:   []string{".go", ".env"},
+				Value:   []string{".go", ".env", ".mod"},
 				Usage:   "set allow file extensions",
 			},
 		},
 		Before: func(ctx context.Context, cmd *cli.Command) (context.Context, error) {
-			ignoreDirs := cmd.StringSlice("ignore-dirs")
+			excludeDirs := cmd.StringSlice("exclude-dirs")
+			includeDirs := cmd.StringSlice("include-dirs")
 			extensions := cmd.StringSlice("extension")
 
-			raw := strings.Join(ignoreDirs, "|")
+			raw := strings.Join(excludeDirs, "|")
 			raw = strings.ReplaceAll(raw, ",", "|")
 			raw = fmt.Sprintf("(%s)", raw)
 			regex, err := regexp.Compile(raw)
 			if err != nil {
-				return nil, cli.Exit("invalid ignore directories regex", 1)
+				return nil, cli.Exit("invalid exclude directories regex", 1)
 			}
-			ignoreRegex = regex
-			log.Debug().Str("raw", raw).Msg("compile ignore regex")
+			excludeRegex = regex
+			log.Debug().Str("raw", raw).Msg("compile exclude regex")
+
+			raw = strings.Join(excludeDirs, "|")
+			raw = strings.ReplaceAll(raw, ",", "|")
+			raw = fmt.Sprintf("(%s)", raw)
+			regex, err = regexp.Compile(raw)
+			if err != nil {
+				return nil, cli.Exit("invalid include directories regex", 1)
+			}
+			includeRegex = regex
+			log.Debug().Str("raw", raw).Msg("compile include regex")
 
 			raw = strings.Join(extensions, "|")
 			raw = strings.ReplaceAll(raw, ",", "|")
@@ -306,7 +324,11 @@ func runWatcher(name string, args ...string) {
 
 func walkDir(path string, watcher *fsnotify.Watcher) error {
 	return filepath.WalkDir(path, func(path string, d fs.DirEntry, _ error) error {
-		if !d.IsDir() || ignoreRegex.MatchString(strings.ToLower(path)) {
+		if !d.IsDir() {
+			return nil
+		}
+		if !includeRegex.MatchString(strings.ToLower(path)) &&
+			excludeRegex.MatchString(strings.ToLower(path)) {
 			return nil
 		}
 		log.Debug().Str("path", path).Msg("add path")
