@@ -20,6 +20,10 @@ func handleRecover() {
 
 func main() {
 	log.Logger = logger
+	log.Info().
+		Str("version", appVersion).
+		Int("pid", os.Getpid()).
+		Msg("starting application")
 
 	defer handleRecover()
 	defer killProcess()
