@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"time"
 
@@ -54,6 +56,8 @@ var fileCmd = &cli.Command{
 		args := c.Args()
 		d := c.Duration("delay")
 		log.Info().
+			Str("version", appVersion).
+			Int("pid", os.Getpid()).
 			Strs("command", args.Slice()).
 			Msgf("watching command")
 
@@ -80,6 +84,8 @@ var commandCmd = &cli.Command{
 		args := c.Args()
 		d := c.Duration("duration")
 		log.Info().
+			Str("version", appVersion).
+			Int("pid", os.Getpid()).
 			Dur("duration", d).
 			Strs("command", args.Slice()).
 			Msgf("watching command")
@@ -95,6 +101,7 @@ var rootCmd = &cli.Command{
 	Version:                  appVersion,
 	EnableShellCompletion:    true,
 	UseShortOptionHandling:   true,
+	Suggest:                  true,
 	ExitErrHandler:           func(_ context.Context, _ *cli.Command, _ error) {},
 	CommandNotFound:          func(context.Context, *cli.Command, string) {},
 	OnUsageError:             func(_ context.Context, _ *cli.Command, _ error, _ bool) error { return nil },
@@ -138,10 +145,16 @@ func parseEnvFiles(files []string) error {
 		if file == "off" {
 			return nil
 		}
-		if file == "." {
-			files[i] = ".env"
+		dir := filepath.Dir(file)
+		base := filepath.Base(file)
+		if base == "." {
+			files[i] = filepath.Join(dir, ".env")
 		}
 	}
+	log.Info().
+		Strs("env", files).
+		Msg("parse env files")
+
 	return godotenv.Load(files...)
 }
 

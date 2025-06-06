@@ -28,4 +28,8 @@ var logger = log.Output(zerolog.ConsoleWriter{
 		}
 		return ""
 	},
+	FieldsOrder: []string{
+		"version",
+		"pid",
+	},
 })

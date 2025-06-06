@@ -7,7 +7,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-var appVersion = "0.1.0"
+var appVersion = "0.1.1"
 
 func handleRecover() {
 	if r := recover(); r != nil {
@@ -20,10 +20,6 @@ func handleRecover() {
 
 func main() {
 	log.Logger = logger
-	log.Info().
-		Str("version", appVersion).
-		Int("pid", os.Getpid()).
-		Msg("starting application")
 
 	defer handleRecover()
 	defer killProcess()
