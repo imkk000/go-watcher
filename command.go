@@ -8,11 +8,16 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/joho/godotenv"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/urfave/cli/v3"
 )
+
+type Config struct {
+	Name     string
+	Args     []string
+	Duration time.Duration
+}
 
 var fileCmd = &cli.Command{
 	Aliases: []string{"fs"},
@@ -36,7 +41,7 @@ var fileCmd = &cli.Command{
 		&cli.StringSliceFlag{
 			Aliases: []string{"s"},
 			Name:    "extensions",
-			Value:   []string{".go", ".env", ".mod"},
+			Value:   []string{".go", ".mod", ".env"},
 			Usage:   "set allow file extensions",
 		},
 		&cli.DurationFlag{
@@ -61,7 +66,11 @@ var fileCmd = &cli.Command{
 			Strs("command", args.Slice()).
 			Msgf("watching command")
 
-		go runFileWatcher(ctx, d, args.First(), args.Tail()...)
+		go runFileWatcher(ctx, Config{
+			Duration: d,
+			Name:     args.First(),
+			Args:     args.Tail(),
+		})
 		killSignal(ctx)
 
 		return nil
@@ -90,7 +99,11 @@ var commandCmd = &cli.Command{
 			Strs("command", args.Slice()).
 			Msgf("watching command")
 
-		go runCommandWatcher(ctx, d, args.First(), args.Tail()...)
+		go runCommandWatcher(ctx, Config{
+			Duration: d,
+			Name:     args.First(),
+			Args:     args.Tail(),
+		})
 		killSignal(ctx)
 
 		return nil
@@ -128,19 +141,14 @@ var rootCmd = &cli.Command{
 			Str("log_level", level.String()).
 			Msg("set log level")
 
-		envFiles := c.StringSlice("env")
-		if len(envFiles) > 0 {
-			if err := parseEnvFiles(envFiles); err != nil {
-				err = fmt.Errorf("parse env file: %w", err)
-				return nil, cli.Exit(err, 1)
-			}
-		}
-		return ctx, nil
+		envFiles := getEnvFiles(c.StringSlice("env"))
+
+		return context.WithValue(ctx, envFilesKey{}, envFiles), nil
 	},
 	Commands: []*cli.Command{commandCmd, fileCmd},
 }
 
-func parseEnvFiles(files []string) error {
+func getEnvFiles(files []string) []string {
 	for i, file := range files {
 		if file == "off" {
 			return nil
@@ -151,11 +159,8 @@ func parseEnvFiles(files []string) error {
 			files[i] = filepath.Join(dir, ".env")
 		}
 	}
-	log.Info().
-		Strs("env", files).
-		Msg("parse env files")
 
-	return godotenv.Load(files...)
+	return files
 }
 
 func validateArgs(ctx context.Context, c *cli.Command) (context.Context, error) {

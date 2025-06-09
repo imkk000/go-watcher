@@ -5,7 +5,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -13,13 +12,10 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-var (
-	exclusionRegex *regexp.Regexp
-	inclusionRegex *regexp.Regexp
-	extensionRegex *regexp.Regexp
-)
+func runFileWatcher(ctx context.Context, c Config) {
+	name, args := c.Name, c.Args
+	d := c.Duration
 
-func runFileWatcher(ctx context.Context, d time.Duration, name string, args ...string) {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		log.Fatal().Err(err).Msg("new watcher")
@@ -41,7 +37,7 @@ func runFileWatcher(ctx context.Context, d time.Duration, name string, args ...s
 	}
 
 	// run first time
-	startProcess(name, args...)
+	startProcess(ctx, name, args...)
 
 	var debouncer *time.Timer
 	for {
@@ -79,7 +75,7 @@ func runFileWatcher(ctx context.Context, d time.Duration, name string, args ...s
 				debouncer.Stop()
 			}
 			debouncer = time.AfterFunc(d, func() {
-				startProcess(name, args...)
+				startProcess(ctx, name, args...)
 			})
 		case err, ok := <-watcher.Errors:
 			if !ok {
@@ -105,12 +101,15 @@ func walkDir(path string, watcher *fsnotify.Watcher) error {
 	})
 }
 
-func runCommandWatcher(ctx context.Context, d time.Duration, name string, args ...string) {
+func runCommandWatcher(ctx context.Context, c Config) {
+	name, args := c.Name, c.Args
+	d := c.Duration
+
 	ticker := time.NewTicker(d)
 	defer ticker.Stop()
 
 	// run first time
-	startProcess(name, args...)
+	startProcess(ctx, name, args...)
 
 	for {
 		select {
@@ -122,7 +121,7 @@ func runCommandWatcher(ctx context.Context, d time.Duration, name string, args .
 					log.Error().Err(err).Msg("wait for command")
 				}
 			}
-			startProcess(name, args...)
+			startProcess(ctx, name, args...)
 		}
 	}
 }

@@ -7,8 +7,6 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-var appVersion = "0.1.1"
-
 func handleRecover() {
 	if r := recover(); r != nil {
 		if err, ok := r.(error); ok {
@@ -28,7 +26,7 @@ func main() {
 
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
-	ctx = context.WithValue(ctx, 0, cancel)
+	ctx = context.WithValue(ctx, cancelKey{}, cancel)
 
 	if err := rootCmd.Run(ctx, os.Args); err != nil {
 		log.Fatal().Err(err).Msg("run application")

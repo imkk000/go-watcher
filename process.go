@@ -8,10 +8,9 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/joho/godotenv"
 	"github.com/rs/zerolog/log"
 )
-
-var cmd *exec.Cmd
 
 func reapZombieProcess() {
 	ch := make(chan os.Signal, 1)
@@ -45,16 +44,22 @@ func killProcess() {
 	}
 }
 
-func startProcess(name string, args ...string) {
+func startProcess(ctx context.Context, name string, args ...string) {
 	log.Info().Msg("reloading")
 
 	killProcess()
+
+	envs, err := readEnvs(ctx)
+	if err != nil {
+		log.Error().Err(err).Msg("read environment")
+	}
 
 	stdout := NewColoredWriter(os.Stdout, rgb(255, 219, 153))
 	cmd = exec.Command(name, args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = stdout
 	cmd.Stderr = stdout
+	cmd.Env = envs
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		log.Error().Err(err).Msg("start command")
@@ -68,5 +73,18 @@ func killSignal(ctx context.Context) {
 	<-sig
 
 	log.Info().Msg("killing watcher")
-	ctx.Value(0).(context.CancelFunc)()
+	ctx.Value(cancelKey{}).(context.CancelFunc)()
+}
+
+func readEnvs(ctx context.Context) ([]string, error) {
+	files := ctx.Value(envFilesKey{}).([]string)
+	env, err := godotenv.Read(files...)
+	if err != nil {
+		return nil, err
+	}
+	envs := make([]string, 0, len(env))
+	for k, v := range env {
+		envs = append(envs, k+"="+v)
+	}
+	return append(envs, os.Environ()...), nil
 }
