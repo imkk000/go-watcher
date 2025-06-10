@@ -78,6 +78,9 @@ func killSignal(ctx context.Context) {
 
 func readEnvs(ctx context.Context) ([]string, error) {
 	files := ctx.Value(envFilesKey{}).([]string)
+	if len(files) == 0 {
+		return nil, nil
+	}
 	env, err := godotenv.Read(files...)
 	if err != nil {
 		return nil, err
