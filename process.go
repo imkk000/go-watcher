@@ -54,7 +54,7 @@ func startProcess(ctx context.Context, name string, args ...string) {
 		log.Error().Err(err).Msg("read environment")
 	}
 
-	stdout := NewColoredWriter(os.Stdout, rgb(255, 219, 153))
+	stdout := NewColoredWriter(os.Stdout, rgb(168, 149, 90))
 	cmd = exec.Command(name, args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = stdout

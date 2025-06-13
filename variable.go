@@ -6,7 +6,7 @@ import (
 )
 
 var (
-	appVersion     = "0.1.2"
+	appVersion     = "0.1.3"
 	cmd            *exec.Cmd
 	exclusionRegex *regexp.Regexp
 	inclusionRegex *regexp.Regexp
