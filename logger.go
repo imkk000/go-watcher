@@ -24,7 +24,7 @@ var logger = log.Output(zerolog.ConsoleWriter{
 	},
 	FormatMessage: func(f any) string {
 		if msg, ok := f.(string); ok {
-			return sprintRGB(255, 192, 203, msg)
+			return sprintRGB(140, 140, 140, msg)
 		}
 		return ""
 	},
