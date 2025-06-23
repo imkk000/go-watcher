@@ -35,7 +35,7 @@ func killProcess() {
 	if cmd != nil {
 		log.Debug().Msg("killing")
 		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
-			log.Error().Err(err).Msg("kill command")
+			log.Debug().Err(err).Msg("kill command")
 		}
 		if err := cmd.Wait(); err != nil {
 			log.Debug().Err(err).Msg("wait to kill command")

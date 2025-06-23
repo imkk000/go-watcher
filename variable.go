@@ -2,18 +2,15 @@ package main
 
 import (
 	"os/exec"
-	"regexp"
 )
 
 var (
-	appVersion     = "0.1.3"
-	cmd            *exec.Cmd
-	exclusionRegex *regexp.Regexp
-	inclusionRegex *regexp.Regexp
-	extensionRegex *regexp.Regexp
+	appVersion = "0.2.0"
+	cmd        *exec.Cmd
 )
 
 type (
 	cancelKey   struct{}
 	envFilesKey struct{}
+	patternsKey struct{}
 )

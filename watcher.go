@@ -5,7 +5,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -15,6 +14,14 @@ import (
 func runFileWatcher(ctx context.Context, c Config) {
 	name, args := c.Name, c.Args
 	d := c.Duration
+	var patterns []Pattern
+	if patVal := ctx.Value(patternsKey{}); patVal != nil {
+		pats, ok := patVal.([]Pattern)
+		if !ok {
+			log.Fatal().Msg("match patterns not found")
+		}
+		patterns = pats
+	}
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -25,14 +32,13 @@ func runFileWatcher(ctx context.Context, c Config) {
 			log.Error().Err(err).Msg("close watcher")
 		}
 	}()
-
 	rootPath, err := os.Getwd()
 	if err != nil {
 		log.Fatal().Err(err).Msg("get working directory")
 	}
 	log.Debug().Str("dir", rootPath).Msg("get working directory")
 
-	if err := walkDir(rootPath, watcher); err != nil {
+	if err := walkDir(rootPath, watcher, patterns); err != nil {
 		log.Fatal().Err(err).Msg("walk directory")
 	}
 
@@ -54,16 +60,19 @@ func runFileWatcher(ctx context.Context, c Config) {
 				continue
 			}
 			if info.IsDir() {
-				if err := walkDir(event.Name, watcher); err != nil {
+				if err := walkDir(event.Name, watcher, patterns); err != nil {
 					log.Debug().Err(err).Str("path", event.Name).Msg("add path")
 					continue
 				}
-				log.Info().Str("path", event.Name).Msg("add path")
 				continue
 			}
-			ext := strings.ToLower(filepath.Ext(event.Name))
-			if !extensionRegex.MatchString(ext) ||
-				exclusionRegex.MatchString(strings.ToLower(event.Name)) {
+			relPath, err := filepath.Rel(rootPath, event.Name)
+			if err != nil {
+				log.Debug().Err(err).Str("path", event.Name).Msg("relative path")
+				continue
+			}
+			valid, isExclusion := matchPatterns(relPath, patterns)
+			if !valid || isExclusion {
 				continue
 			}
 			switch event.Op {
@@ -87,13 +96,9 @@ func runFileWatcher(ctx context.Context, c Config) {
 	}
 }
 
-func walkDir(path string, watcher *fsnotify.Watcher) error {
-	return filepath.WalkDir(path, func(path string, d fs.DirEntry, _ error) error {
+func walkDir(rootPath string, watcher *fsnotify.Watcher, patterns []Pattern) error {
+	return filepath.WalkDir(rootPath, func(path string, d fs.DirEntry, _ error) error {
 		if !d.IsDir() {
-			return nil
-		}
-		if !inclusionRegex.MatchString(strings.ToLower(path)) ||
-			exclusionRegex.MatchString(strings.ToLower(path)) {
 			return nil
 		}
 		log.Debug().Str("path", path).Msg("add path")

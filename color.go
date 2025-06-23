@@ -39,7 +39,3 @@ func rgb(r, g, b int) string {
 func sprintRGB(r, g, b int, text string) string {
 	return fmt.Sprintf("%s%s%s", rgb(r, g, b), text, ResetColor)
 }
-
-func clearScreen() {
-	fmt.Print(ClearScreen)
-}

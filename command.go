@@ -2,10 +2,9 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
+	"slices"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -19,30 +18,29 @@ type Config struct {
 	Duration time.Duration
 }
 
+func defaultMatchPatterns() []string {
+	return []string{
+		"-w:**/.vscode/**",
+		"-w:**/.git/**",
+		"-w:**/.DS_Store/**",
+		"-w:**/.idea/**",
+		"-w:**/node_modules/**",
+		"-w:**/script/**",
+		`r:.+\.go$`,
+		`r:.+\.env$`,
+		`r:.+\.mod$`,
+	}
+}
+
 var fileCmd = &cli.Command{
 	Aliases: []string{"fs"},
 	Name:    "file",
 	Flags: []cli.Flag{
 		&cli.StringSliceFlag{
-			Aliases: []string{"e"},
-			Name:    "exclusions",
-			Value: []string{
-				".git", ".DS_Store", ".idea",
-				".vscode", "node_modules", "script",
-			},
-			Usage: "set exclusion patterns",
-		},
-		&cli.StringSliceFlag{
-			Aliases: []string{"i"},
-			Name:    "inclusions",
-			Value:   []string{},
-			Usage:   "set inclusion patterns",
-		},
-		&cli.StringSliceFlag{
-			Aliases: []string{"s"},
-			Name:    "extensions",
-			Value:   []string{".go", ".mod", ".env"},
-			Usage:   "set allow file extensions",
+			Aliases: []string{"m"},
+			Name:    "match",
+			Value:   defaultMatchPatterns(),
+			Usage:   "set match patterns [+-][rew]:<pattern>",
 		},
 		&cli.DurationFlag{
 			Aliases: []string{"n", "d"},
@@ -52,9 +50,19 @@ var fileCmd = &cli.Command{
 		},
 	},
 	Before: func(ctx context.Context, c *cli.Command) (context.Context, error) {
-		if err := parseRegexps(c); err != nil {
-			return nil, err
+		inputPatterns := c.StringSlice("match")
+		if slices.Compare(inputPatterns, defaultMatchPatterns()) != 0 {
+			inputPatterns = append(inputPatterns, defaultMatchPatterns()...)
 		}
+		patterns := parsePatterns(inputPatterns)
+		if len(patterns) == 0 {
+			return nil, cli.Exit("no match patterns provided", 1)
+		}
+		ctx = context.WithValue(ctx, patternsKey{}, patterns)
+		log.Debug().
+			Interface("patterns", patterns).
+			Msg("parse patterns")
+
 		return validateArgs(ctx, c)
 	},
 	Action: func(ctx context.Context, c *cli.Command) error {
@@ -169,32 +177,4 @@ func validateArgs(ctx context.Context, c *cli.Command) (context.Context, error) 
 		return nil, cli.Exit("no command provided to watch", 1)
 	}
 	return ctx, nil
-}
-
-func parseRegexps(c *cli.Command) error {
-	fn := func(r **regexp.Regexp, key string) error {
-		raw := joinPipe(c.StringSlice(key))
-		regex, err := regexp.Compile(raw)
-		if err != nil {
-			err := fmt.Errorf("invalid %s regex", key)
-			return cli.Exit(err, 1)
-		}
-		*r = regex
-
-		log.Debug().
-			Str("rules", raw).
-			Msgf("compile %s regex", key)
-
-		return nil
-	}
-	if err := fn(&exclusionRegex, "exclusions"); err != nil {
-		return err
-	}
-	if err := fn(&inclusionRegex, "inclusions"); err != nil {
-		return err
-	}
-	if err := fn(&extensionRegex, "extensions"); err != nil {
-		return err
-	}
-	return nil
 }
