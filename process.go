@@ -89,5 +89,5 @@ func readEnvs(ctx context.Context) ([]string, error) {
 	for k, v := range env {
 		envs = append(envs, k+"="+v)
 	}
-	return append(envs, os.Environ()...), nil
+	return append(os.Environ(), envs...), nil
 }
