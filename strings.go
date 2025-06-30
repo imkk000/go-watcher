@@ -8,13 +8,13 @@ import (
 	"github.com/bmatcuk/doublestar/v4"
 )
 
-func joinPipe(v []string) (s string) {
-	s = strings.Join(v, "|")
+func joinPipe(v []string) string {
+	s := strings.Join(v, "|")
 	s = strings.ReplaceAll(s, ",", "|")
-	return
+	return s
 }
 
-func parsePatterns(patterns []string) (result []Pattern) {
+func parsePatterns(patterns []string) []Pattern {
 	slices.SortFunc(patterns, func(a, b string) int {
 		if a == "+" || b == "+" {
 			return 0
@@ -24,23 +24,24 @@ func parsePatterns(patterns []string) (result []Pattern) {
 		}
 		return strings.Compare(a, b)
 	})
-	for _, pattern := range patterns {
-		result = append(result, parsePattern(pattern))
+	result := make([]Pattern, len(patterns))
+	for i, pattern := range patterns {
+		result[i] = parsePattern(pattern)
 	}
-	return
+	return result
 }
 
-func parsePattern(pattern string) (pat Pattern) {
+func parsePattern(pattern string) Pattern {
 	// - for exclude patterns
 	// r: regexp
 	// e: exact match
 	// w: wildcard match
 	// [+-][rew]:<pattern>
-	pat = Pattern{
+	pat := Pattern{
 		IsExclude: true,
 	}
 	if pattern == "" {
-		return
+		return pat
 	}
 	if pattern[0] == '+' {
 		pat.IsExclude = false
@@ -61,7 +62,7 @@ func parsePattern(pattern string) (pat Pattern) {
 		pat.Wildcard = true
 		pat.Value = pattern[2:]
 	}
-	return
+	return pat
 }
 
 type Pattern struct {
@@ -89,7 +90,7 @@ func (p Pattern) Match(s string) bool {
 	return false
 }
 
-func matchPatterns(s string, patterns []Pattern) (bool, bool) {
+func matchPatterns(s string, patterns []Pattern) (valid bool, isExclude bool) {
 	for _, p := range patterns {
 		if ok := p.Match(s); ok {
 			return true, p.IsExclude

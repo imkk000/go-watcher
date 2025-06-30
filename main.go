@@ -7,19 +7,17 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func handleRecover() {
-	if r := recover(); r != nil {
-		if err, ok := r.(error); ok {
-			log.Panic().Err(err).Msg("application panic")
-		}
-		log.Panic().Msgf("application panic: %v", r)
-	}
-}
-
 func main() {
 	log.Logger = logger
 
-	defer handleRecover()
+	defer func() {
+		if r := recover(); r != nil {
+			if err, ok := r.(error); ok {
+				log.Panic().Err(err).Msg("application panic")
+			}
+			log.Panic().Msgf("application panic: %v", r)
+		}
+	}()
 	defer killProcess()
 
 	go reapZombieProcess()

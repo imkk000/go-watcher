@@ -26,9 +26,9 @@ func defaultMatchPatterns() []string {
 		"-w:**/.idea/**",
 		"-w:**/node_modules/**",
 		"-w:**/script/**",
-		"w:*.go",
-		"w:*.mod",
 		"w:*.env",
+		`r:\.go`,
+		`r:\.mod`,
 	}
 }
 
