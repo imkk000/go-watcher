@@ -9,7 +9,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/imkk000/go-watcher/walkcmd"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/urfave/cli/v3"
@@ -140,8 +139,7 @@ var rootCmd = &cli.Command{
 					Name:  "json",
 					Usage: "Get completion in JSON format",
 					Action: func(_ context.Context, c *cli.Command) error {
-						info := walkcmd.Walk(c.Root())
-						data, err := json.Marshal(info)
+						data, err := json.Marshal(c.Root())
 						if err != nil {
 							return err
 						}
