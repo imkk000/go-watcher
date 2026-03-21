@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"time"
 
+	"github.com/imkk000/go-watcher/walkcmd"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/urfave/cli/v3"
@@ -120,40 +123,66 @@ var commandCmd = &cli.Command{
 
 var rootCmd = &cli.Command{
 	Version:                  appVersion,
-	EnableShellCompletion:    true,
+	EnableShellCompletion:    false,
 	UseShortOptionHandling:   true,
 	Suggest:                  true,
 	ExitErrHandler:           func(_ context.Context, _ *cli.Command, _ error) {},
 	CommandNotFound:          func(context.Context, *cli.Command, string) {},
 	OnUsageError:             func(_ context.Context, _ *cli.Command, _ error, _ bool) error { return nil },
 	InvalidFlagAccessHandler: func(context.Context, *cli.Command, string) {},
-	Flags: []cli.Flag{
-		&cli.StringFlag{
-			Name:  "log-level",
-			Value: "info",
-			Usage: "set the log level",
+	Commands: []*cli.Command{
+		// support hack-core
+		{
+			Name:  "completion",
+			Usage: "Get shell completion",
+			Commands: []*cli.Command{
+				{
+					Name:  "json",
+					Usage: "Get completion in JSON format",
+					Action: func(_ context.Context, c *cli.Command) error {
+						info := walkcmd.Walk(c.Root())
+						data, err := json.Marshal(info)
+						if err != nil {
+							return err
+						}
+						fmt.Println(string(data))
+
+						return nil
+					},
+				},
+			},
 		},
-		&cli.StringSliceFlag{
-			Name:  "env",
-			Value: []string{"off"},
-			Usage: "set env files",
+		{
+			Name: "watch",
+			Flags: []cli.Flag{
+				&cli.StringFlag{
+					Name:  "log-level",
+					Value: "info",
+					Usage: "set the log level",
+				},
+				&cli.StringSliceFlag{
+					Name:  "env",
+					Value: []string{"off"},
+					Usage: "set env files",
+				},
+			},
+			Before: func(ctx context.Context, c *cli.Command) (context.Context, error) {
+				level, err := zerolog.ParseLevel(c.String("log-level"))
+				if err != nil {
+					return nil, cli.Exit(err, 1)
+				}
+				zerolog.SetGlobalLevel(level)
+				log.Debug().
+					Str("log_level", level.String()).
+					Msg("set log level")
+
+				envFiles := getEnvFiles(c.StringSlice("env"))
+
+				return context.WithValue(ctx, envFilesKey{}, envFiles), nil
+			},
+			Commands: []*cli.Command{fileCmd, commandCmd},
 		},
 	},
-	Before: func(ctx context.Context, c *cli.Command) (context.Context, error) {
-		level, err := zerolog.ParseLevel(c.String("log-level"))
-		if err != nil {
-			return nil, cli.Exit(err, 1)
-		}
-		zerolog.SetGlobalLevel(level)
-		log.Debug().
-			Str("log_level", level.String()).
-			Msg("set log level")
-
-		envFiles := getEnvFiles(c.StringSlice("env"))
-
-		return context.WithValue(ctx, envFilesKey{}, envFiles), nil
-	},
-	Commands: []*cli.Command{commandCmd, fileCmd},
 }
 
 func getEnvFiles(files []string) []string {

@@ -5,7 +5,7 @@ import (
 )
 
 var (
-	appVersion = "0.2.2"
+	appVersion = "0.2.3"
 	cmd        *exec.Cmd
 )
 

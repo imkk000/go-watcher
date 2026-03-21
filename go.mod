@@ -1,8 +1,9 @@
 module github.com/imkk000/go-watcher
 
-go 1.24
+go 1.25
 
 require (
+	github.com/bmatcuk/doublestar/v4 v4.8.1
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/joho/godotenv v1.5.1
 	github.com/rs/zerolog v1.34.0
@@ -11,7 +12,6 @@ require (
 )
 
 require (
-	github.com/bmatcuk/doublestar/v4 v4.8.1 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
