@@ -47,7 +47,8 @@ Anything after `--` is the command to run (and re-run on changes).
 ```
 go-watcher
 ├── watch                   shared flags: --log-level, --env
-│   └── file (alias: fs)    file watcher; flags: --match, --delay, --signal, --log-filter, --tui
+│   ├── file (alias: fs)    file watcher; flags: --match, --delay, --signal, --log-filter, --tui
+│   └── manual (alias: m)   no file watching; always TUI; reload only via /reload
 └── completion json         dump CLI structure as JSON (for hack-core)
 ```
 
@@ -67,6 +68,26 @@ go-watcher
 | `--signal`     | `-s`       | `SIGKILL`       | signal sent to the process on each reload                          |
 | `--log-filter` | `-f`       | (none)          | regex to filter subprocess output; only matching lines are printed |
 | `--tui`        |            | `false`         | launch the interactive TUI with a live filter search box           |
+
+### `watch manual` flags
+
+`manual` runs the command once in the TUI and never restarts it on file change.
+Use `/reload` from the TUI command bar when you want to rebuild — handy for
+slow rebuilds (Docker images, codegen, etc.) where automatic reload would be
+disruptive.
+
+| flag           | aliases | default   | meaning                                                              |
+| -------------- | ------- | --------- | -------------------------------------------------------------------- |
+| `--log-filter` | `-f`    | (none)    | regex pre-filled into the TUI filter input at startup                |
+| `--signal`     | `-s`    | `SIGKILL` | signal sent to the process on `/reload`                              |
+
+```sh
+# manually rebuild a docker image, only when you press /reload in the TUI
+go-watcher watch manual -- docker build -t myimage .
+
+# short form
+go-watcher watch m -- make release
+```
 
 ---
 
@@ -176,25 +197,47 @@ go-watcher watch file -f 'ERROR|WARN' -- go run .
 - `--log-filter` pre-populates the filter input at startup.
 - Watcher messages (reload, started, etc.) appear in the viewport alongside subprocess output.
 
+### Modes
+
+The input box has three modes, selected by the first character you type:
+
+| first char | mode    | what it does                                                                            |
+| ---------- | ------- | --------------------------------------------------------------------------------------- |
+| (any)      | filter  | live regex filter — non-matching lines are hidden                                       |
+| `/`        | command | run a TUI command on `Enter` (`/reload`, `/clear`, `/quit`)                             |
+| `?`        | search  | vim-style search — highlight matches, jump to them, navigate with `n`/`N`. No filtering |
+
 ### Key bindings
 
-| key              | action                                                                      |
-| ---------------- | --------------------------------------------------------------------------- |
-| type text        | filter log lines live (regex; falls back to literal match on invalid regex) |
-| `/` (first char) | switch to command mode                                                      |
-| `Enter`          | execute command (command mode only)                                         |
-| `Esc`            | cancel command and return to filter mode; or quit if already in filter mode |
-| `Ctrl+C`         | quit                                                                        |
+| key              | action                                                                                   |
+| ---------------- | ---------------------------------------------------------------------------------------- |
+| type text        | live filter (regex; falls back to literal match on invalid regex)                        |
+| `/` (first char) | command mode (label turns orange)                                                        |
+| `?` (first char) | search mode (label turns cyan); type a regex, hit `Enter` to commit                      |
+| `Enter`          | run command (command mode), or commit search (search mode)                               |
+| `n` / `N`        | jump to next / previous search match (only when input is empty and a search is active)   |
+| `Esc`            | clear input; if input is already empty, clear active search; if no search, quit          |
+| `Ctrl+C`         | quit                                                                                     |
 
 ### TUI commands
 
-Type `/` to enter command mode — the label turns orange and the viewport shows all lines unfiltered while you type.
+| command            | action                                                |
+| ------------------ | ----------------------------------------------------- |
+| `/reload`          | immediately restart the watched process (no debounce) |
+| `/clear`           | clear the viewport (drops the buffered log history)   |
+| `/quit` (`/exit`)  | quit the TUI                                          |
 
-| command   | action                                                |
-| --------- | ----------------------------------------------------- |
-| `/reload` | immediately restart the watched process (no debounce) |
+### Search
 
-Press `Enter` to run the command. Press `Esc` to cancel without running it.
+Type `?keyword` and press `Enter`. The TUI:
+
+1. Highlights every match across all buffered lines (current match in orange, others in yellow).
+2. Scrolls the viewport so the current match is centered.
+3. Clears the input — now `n` and `N` move to the next / previous match.
+4. New log lines arriving while a search is active are highlighted automatically.
+5. `Esc` clears the active search and removes highlights.
+
+The query accepts the same Go regex syntax as the filter; an invalid regex falls back to a literal substring search.
 
 ```sh
 # open TUI, pre-filter to ERROR lines

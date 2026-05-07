@@ -124,6 +124,58 @@ var fileCmd = &cli.Command{
 	},
 }
 
+var manualCmd = &cli.Command{
+	Aliases: []string{"m"},
+	Name:    "manual",
+	Usage:   "run command in TUI without file watching; reload only via /reload",
+	Flags: []cli.Flag{
+		&cli.StringFlag{
+			Aliases: []string{"f"},
+			Name:    "log-filter",
+			Usage:   "regex pre-filled into the TUI filter input at startup",
+		},
+		&cli.StringFlag{
+			Aliases: []string{"s"},
+			Name:    "signal",
+			Value:   "SIGKILL",
+			Usage:   "signal sent to process on reload: SIGKILL, SIGTERM, SIGHUP, SIGINT",
+		},
+	},
+	Before: validateArgs,
+	Action: func(ctx context.Context, c *cli.Command) error {
+		args := c.Args()
+		filterPattern := c.String("log-filter")
+
+		sig, err := parseSignal(c.String("signal"))
+		if err != nil {
+			return cli.Exit(err.Error(), 1)
+		}
+		killSig = sig
+
+		lineCh := make(chan string, 512)
+		reloadCh := make(chan struct{}, 1)
+		log.Logger = newLogger(&tuiLogWriter{ch: lineCh})
+
+		log.Info().
+			Str("version", appVersion).
+			Int("pid", os.Getpid()).
+			Strs("command", args.Slice()).
+			Msgf("manual mode (reload via /reload)")
+
+		cfg := Config{
+			Name:     args.First(),
+			Args:     args.Tail(),
+			LineCh:   lineCh,
+			ReloadCh: reloadCh,
+		}
+
+		go runManualWatcher(ctx, cfg)
+		runTUI(ctx, lineCh, reloadCh, filterPattern)
+
+		return nil
+	},
+}
+
 var rootCmd = &cli.Command{
 	Version:                  appVersion,
 	EnableShellCompletion:    false,
@@ -183,7 +235,7 @@ var rootCmd = &cli.Command{
 
 				return context.WithValue(ctx, envFilesKey{}, envFiles), nil
 			},
-			Commands: []*cli.Command{fileCmd},
+			Commands: []*cli.Command{fileCmd, manualCmd},
 		},
 	},
 }

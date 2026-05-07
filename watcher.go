@@ -114,6 +114,21 @@ func walkDir(rootPath string, watcher *fsnotify.Watcher, rules []Rule) error {
 	})
 }
 
+// runManualWatcher starts the process once and only restarts it when the TUI
+// sends a ReloadCh signal (e.g. via the /reload command). No filesystem
+// watching is performed.
+func runManualWatcher(ctx context.Context, c Config) {
+	startProcess(ctx, c)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-c.ReloadCh:
+			startProcess(ctx, c)
+		}
+	}
+}
+
 // shouldSkipDir returns true when an exclude rule matches the directory itself
 // or any path inside it. This avoids registering watches under dirs like
 // .git/, node_modules/, etc.
