@@ -2,15 +2,17 @@ package main
 
 import (
 	"os/exec"
+	"syscall"
 )
 
 var (
-	appVersion = "0.2.3"
+	appVersion = "0.4.0"
 	cmd        *exec.Cmd
+	killSig    syscall.Signal = syscall.SIGKILL
 )
 
 type (
 	cancelKey   struct{}
 	envFilesKey struct{}
-	patternsKey struct{}
+	rulesKey    struct{}
 )

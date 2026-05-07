@@ -12,15 +12,14 @@ import (
 )
 
 func runFileWatcher(ctx context.Context, c Config) {
-	name, args := c.Name, c.Args
 	d := c.Duration
-	var patterns []Pattern
-	if patVal := ctx.Value(patternsKey{}); patVal != nil {
-		pats, ok := patVal.([]Pattern)
+	var rules []Rule
+	if v := ctx.Value(rulesKey{}); v != nil {
+		rs, ok := v.([]Rule)
 		if !ok {
-			log.Fatal().Msg("match patterns not found")
+			log.Fatal().Msg("rules not found")
 		}
-		patterns = pats
+		rules = rs
 	}
 
 	watcher, err := fsnotify.NewWatcher()
@@ -38,12 +37,12 @@ func runFileWatcher(ctx context.Context, c Config) {
 	}
 	log.Debug().Str("dir", rootPath).Msg("get working directory")
 
-	if err := walkDir(rootPath, watcher, patterns); err != nil {
+	if err := walkDir(rootPath, watcher, rules); err != nil {
 		log.Fatal().Err(err).Msg("walk directory")
 	}
 
 	// run first time
-	startProcess(ctx, name, args...)
+	startProcess(ctx, c)
 
 	var debouncer *time.Timer
 	for {
@@ -60,7 +59,7 @@ func runFileWatcher(ctx context.Context, c Config) {
 				continue
 			}
 			if info.IsDir() {
-				if err := walkDir(event.Name, watcher, patterns); err != nil {
+				if err := walkDir(event.Name, watcher, rules); err != nil {
 					log.Debug().Err(err).Str("path", event.Name).Msg("add path")
 					continue
 				}
@@ -71,8 +70,7 @@ func runFileWatcher(ctx context.Context, c Config) {
 				log.Debug().Err(err).Str("path", event.Name).Msg("relative path")
 				continue
 			}
-			valid, isExclusion := matchPatterns(relPath, patterns)
-			if !valid || isExclusion {
+			if !matchRules(relPath, rules) {
 				continue
 			}
 			switch event.Op {
@@ -84,8 +82,13 @@ func runFileWatcher(ctx context.Context, c Config) {
 				debouncer.Stop()
 			}
 			debouncer = time.AfterFunc(d, func() {
-				startProcess(ctx, name, args...)
+				startProcess(ctx, c)
 			})
+		case <-c.ReloadCh:
+			if debouncer != nil {
+				debouncer.Stop()
+			}
+			startProcess(ctx, c)
 		case err, ok := <-watcher.Errors:
 			if !ok {
 				log.Debug().Msg("channel closed")
@@ -96,37 +99,33 @@ func runFileWatcher(ctx context.Context, c Config) {
 	}
 }
 
-func walkDir(rootPath string, watcher *fsnotify.Watcher, patterns []Pattern) error {
+func walkDir(rootPath string, watcher *fsnotify.Watcher, rules []Rule) error {
 	return filepath.WalkDir(rootPath, func(path string, d fs.DirEntry, _ error) error {
 		if !d.IsDir() {
 			return nil
+		}
+		if rel, err := filepath.Rel(rootPath, path); err == nil && rel != "." {
+			if shouldSkipDir(rel, rules) {
+				return filepath.SkipDir
+			}
 		}
 		log.Debug().Str("path", path).Msg("add path")
 		return watcher.Add(path)
 	})
 }
 
-func runCommandWatcher(ctx context.Context, c Config) {
-	name, args := c.Name, c.Args
-	d := c.Duration
-
-	ticker := time.NewTicker(d)
-	defer ticker.Stop()
-
-	// run first time
-	startProcess(ctx, name, args...)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if cmd != nil {
-				if err := cmd.Wait(); err != nil {
-					log.Error().Err(err).Msg("wait for command")
-				}
-			}
-			startProcess(ctx, name, args...)
+// shouldSkipDir returns true when an exclude rule matches the directory itself
+// or any path inside it. This avoids registering watches under dirs like
+// .git/, node_modules/, etc.
+func shouldSkipDir(rel string, rules []Rule) bool {
+	probe := rel + "/x"
+	for _, r := range rules {
+		if r.Include {
+			continue
+		}
+		if r.Match(rel) || r.Match(probe) {
+			return true
 		}
 	}
+	return false
 }

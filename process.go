@@ -1,11 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
+	"regexp"
+	"strings"
 	"syscall"
 
 	"github.com/joho/godotenv"
@@ -33,8 +38,8 @@ func reapZombieProcess() {
 
 func killProcess() {
 	if cmd != nil {
-		log.Debug().Msg("killing")
-		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
+		log.Debug().Str("signal", killSig.String()).Msg("killing")
+		if err := syscall.Kill(-cmd.Process.Pid, killSig); err != nil {
 			log.Debug().Err(err).Msg("kill command")
 		}
 		if err := cmd.Wait(); err != nil {
@@ -44,21 +49,76 @@ func killProcess() {
 	}
 }
 
-func startProcess(ctx context.Context, name string, args ...string) {
+func parseSignal(s string) (syscall.Signal, error) {
+	switch strings.ToUpper(strings.TrimPrefix(strings.ToUpper(s), "SIG")) {
+	case "KILL":
+		return syscall.SIGKILL, nil
+	case "TERM":
+		return syscall.SIGTERM, nil
+	case "HUP":
+		return syscall.SIGHUP, nil
+	case "INT":
+		return syscall.SIGINT, nil
+	default:
+		return 0, fmt.Errorf("unsupported signal %q: must be SIGKILL, SIGTERM, SIGHUP, or SIGINT", s)
+	}
+}
+
+// filteredWriter buffers subprocess output and only forwards lines matching filter.
+type filteredWriter struct {
+	w      io.Writer
+	filter *regexp.Regexp
+	buf    []byte
+}
+
+func (f *filteredWriter) Write(p []byte) (int, error) {
+	f.buf = append(f.buf, p...)
+	for {
+		i := bytes.IndexByte(f.buf, '\n')
+		if i < 0 {
+			break
+		}
+		line := f.buf[:i+1]
+		f.buf = f.buf[i+1:]
+		if f.filter.Match(line) {
+			if _, err := f.w.Write(line); err != nil {
+				return 0, err
+			}
+		}
+	}
+	return len(p), nil
+}
+
+func startProcess(ctx context.Context, c Config) {
 	log.Info().Msg("reloading")
 
 	killProcess()
+
+	if c.LineCh != nil {
+		c.LineCh <- reloadMark
+	}
 
 	envs, err := readEnvs(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("read environment")
 	}
 
-	stdout := NewColoredWriter(os.Stdout, rgb(168, 149, 90))
-	cmd = exec.Command(name, args...)
+	var out io.Writer
+	if c.LineCh != nil {
+		out = &tuiWriter{ch: c.LineCh}
+	} else {
+		colored := NewColoredWriter(os.Stdout, rgb(168, 149, 90))
+		if c.LogFilter != nil {
+			out = &filteredWriter{w: colored, filter: c.LogFilter}
+		} else {
+			out = colored
+		}
+	}
+
+	cmd = exec.Command(c.Name, c.Args...)
 	cmd.Stdin = os.Stdin
-	cmd.Stdout = stdout
-	cmd.Stderr = stdout
+	cmd.Stdout = out
+	cmd.Stderr = out
 	cmd.Env = envs
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {

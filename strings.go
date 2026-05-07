@@ -1,100 +1,131 @@
 package main
 
 import (
-	"regexp"
-	"slices"
-	"strings"
+	"errors"
+	"fmt"
 
 	"github.com/bmatcuk/doublestar/v4"
 )
 
-func joinPipe(v []string) string {
-	s := strings.Join(v, "|")
-	s = strings.ReplaceAll(s, ",", "|")
-	return s
+// Rule decides whether a relative path should be watched.
+// Match is by Glob (doublestar) only.
+// Include=true means watch on match; false means skip on match.
+// Name is set for built-in rules and lets users override polarity by name.
+type Rule struct {
+	Name    string
+	Include bool
+	Glob    string
 }
 
-func parsePatterns(patterns []string) []Pattern {
-	slices.SortFunc(patterns, func(a, b string) int {
-		if a == "+" || b == "+" {
-			return 0
+func (r Rule) Match(s string) bool {
+	ok, err := doublestar.Match(r.Glob, s)
+	if err != nil {
+		return false
+	}
+	return ok
+}
+
+// builtinRules are the defaults. A user --match=<name> with the same Name
+// replaces the built-in (its polarity is taken from the user input).
+var builtinRules = []Rule{
+	{Name: "go", Include: true, Glob: "**/*.go"},
+	{Name: "mod", Include: true, Glob: "**/go.mod"},
+	{Name: "env", Include: true, Glob: "*.env"},
+	{Name: "git", Include: false, Glob: "**/.git/**"},
+	{Name: "vscode", Include: false, Glob: "**/.vscode/**"},
+	{Name: "idea", Include: false, Glob: "**/.idea/**"},
+	{Name: "ds-store", Include: false, Glob: "**/.DS_Store/**"},
+	{Name: "node-modules", Include: false, Glob: "**/node_modules/**"},
+	{Name: "script", Include: false, Glob: "**/script/**"},
+}
+
+func builtinByName(name string) (Rule, bool) {
+	for _, r := range builtinRules {
+		if r.Name == name {
+			return r, true
 		}
-		if a == "-" || b == "-" {
-			return 1
-		}
-		return strings.Compare(a, b)
-	})
-	result := make([]Pattern, len(patterns))
-	for i, pattern := range patterns {
-		result[i] = parsePattern(pattern)
 	}
-	return result
+	return Rule{}, false
 }
 
-func parsePattern(pattern string) Pattern {
-	// - for exclude patterns
-	// r: regexp
-	// e: exact match
-	// w: wildcard match
-	// [+-][rew]:<pattern>
-	pat := Pattern{
-		IsExclude: true,
+// parseRule reads one --match value: [+-]<name|glob>.
+// No prefix means +. A bare value matching a built-in name reuses that
+// rule's pattern with the user's polarity. Anything else is treated as a glob.
+func parseRule(s string) (Rule, error) {
+	if s == "" {
+		return Rule{}, errors.New("empty rule")
 	}
-	if pattern == "" {
-		return pat
+	include := true
+	switch s[0] {
+	case '+':
+		s = s[1:]
+	case '-':
+		include = false
+		s = s[1:]
 	}
-	if pattern[0] == '+' {
-		pat.IsExclude = false
-		pattern = pattern[1:]
+	if s == "" {
+		return Rule{}, errors.New("rule has no value")
 	}
-	if pattern[0] == '-' {
-		pattern = pattern[1:]
-	} else {
-		pat.IsExclude = false
+	if r, ok := builtinByName(s); ok {
+		r.Include = include
+		return r, nil
 	}
-	switch pattern[0] {
-	case 'r':
-		pat.Regex = regexp.MustCompile(pattern[2:])
-	case 'e':
-		pat.Exact = true
-		pat.Value = pattern[2:]
-	case 'w':
-		pat.Wildcard = true
-		pat.Value = pattern[2:]
-	}
-	return pat
+	return Rule{Include: include, Glob: s}, nil
 }
 
-type Pattern struct {
-	IsExclude bool
-	Exact     bool
-	Wildcard  bool
-	Regex     *regexp.Regexp
-	Value     string
-}
-
-func (p Pattern) Match(s string) bool {
-	if p.Exact {
-		return p.Value == s
-	}
-	if p.Wildcard {
-		valid, err := doublestar.Match(p.Value, s)
+// parseRules parses each user input. Errors are returned for the first bad rule.
+func parseRules(inputs []string) ([]Rule, error) {
+	out := make([]Rule, 0, len(inputs))
+	for _, s := range inputs {
+		r, err := parseRule(s)
 		if err != nil {
+			return nil, fmt.Errorf("rule %q: %w", s, err)
+		}
+		out = append(out, r)
+	}
+	return out, nil
+}
+
+// mergeRules returns the effective rule set: built-in defaults with user
+// rules applied. User rules whose Name matches a built-in REPLACE the built-in
+// in place (so polarity flips work). Other user rules are prepended so they
+// take priority over defaults.
+func mergeRules(userRules []Rule) []Rule {
+	defaults := make([]Rule, len(builtinRules))
+	copy(defaults, builtinRules)
+
+	var extras []Rule
+	for _, ur := range userRules {
+		if ur.Name != "" {
+			replaced := false
+			for i, r := range defaults {
+				if r.Name == ur.Name {
+					defaults[i] = ur
+					replaced = true
+					break
+				}
+			}
+			if replaced {
+				continue
+			}
+		}
+		extras = append(extras, ur)
+	}
+	return append(extras, defaults...)
+}
+
+// matchRules decides whether s should be watched. Exclude wins on any match;
+// otherwise an include match watches; no match means skip.
+func matchRules(s string, rules []Rule) bool {
+	included := false
+	for _, r := range rules {
+		if !r.Match(s) {
+			continue
+		}
+		if !r.Include {
 			return false
 		}
-		return valid
+		included = true
 	}
-	if p.Regex != nil {
-		return p.Regex.MatchString(s)
-	}
-	return false
-}
-
-func matchPatterns(s string, patterns []Pattern) (valid bool, isExclude bool) {
-	for _, p := range patterns {
-		if ok := p.Match(s); ok {
-			return true, p.IsExclude
-		}
-	}
-	return false, true
+	return included
 }

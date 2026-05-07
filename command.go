@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
+	"regexp"
 	"time"
 
 	"github.com/imkk000/go-watcher/walkcmd"
@@ -16,23 +16,12 @@ import (
 )
 
 type Config struct {
-	Name     string
-	Args     []string
-	Duration time.Duration
-}
-
-func defaultMatchPatterns() []string {
-	return []string{
-		"-w:**/.vscode/**",
-		"-w:**/.git/**",
-		"-w:**/.DS_Store/**",
-		"-w:**/.idea/**",
-		"-w:**/node_modules/**",
-		"-w:**/script/**",
-		"w:*.env",
-		`r:\.go`,
-		`r:\.mod`,
-	}
+	Name      string
+	Args      []string
+	Duration  time.Duration
+	LogFilter *regexp.Regexp
+	LineCh    chan string   // non-nil when TUI mode is active
+	ReloadCh  chan struct{} // non-nil when TUI mode is active
 }
 
 var fileCmd = &cli.Command{
@@ -42,80 +31,94 @@ var fileCmd = &cli.Command{
 		&cli.StringSliceFlag{
 			Aliases: []string{"m"},
 			Name:    "match",
-			Value:   defaultMatchPatterns(),
-			Usage:   "set match patterns [+-][rew]:<pattern>",
+			Usage:   "rule [+-]<name|glob>; built-in names: go, mod, env, git, vscode, idea, ds-store, node-modules, script",
 		},
 		&cli.DurationFlag{
 			Aliases: []string{"n", "d"},
 			Name:    "delay",
 			Value:   500 * time.Millisecond,
-			Usage:   "set delay duration",
+			Usage:   "set debounce delay before restart",
+		},
+		&cli.StringFlag{
+			Aliases: []string{"f"},
+			Name:    "log-filter",
+			Usage:   "regex to filter subprocess log lines (only matching lines are shown)",
+		},
+		&cli.BoolFlag{
+			Name:  "tui",
+			Usage: "interactive TUI with live filter search box",
+		},
+		&cli.StringFlag{
+			Aliases: []string{"s"},
+			Name:    "signal",
+			Value:   "SIGKILL",
+			Usage:   "signal sent to process on reload: SIGKILL, SIGTERM, SIGHUP, SIGINT",
 		},
 	},
 	Before: func(ctx context.Context, c *cli.Command) (context.Context, error) {
-		inputPatterns := c.StringSlice("match")
-		if slices.Compare(inputPatterns, defaultMatchPatterns()) != 0 {
-			inputPatterns = append(inputPatterns, defaultMatchPatterns()...)
+		userRules, err := parseRules(c.StringSlice("match"))
+		if err != nil {
+			return nil, cli.Exit(err.Error(), 1)
 		}
-		patterns := parsePatterns(inputPatterns)
-		if len(patterns) == 0 {
-			return nil, cli.Exit("no match patterns provided", 1)
-		}
-		ctx = context.WithValue(ctx, patternsKey{}, patterns)
-		log.Debug().
-			Interface("patterns", patterns).
-			Msg("parse patterns")
+		rules := mergeRules(userRules)
+		ctx = context.WithValue(ctx, rulesKey{}, rules)
+		log.Debug().Interface("rules", rules).Msg("merged rules")
 
 		return validateArgs(ctx, c)
 	},
 	Action: func(ctx context.Context, c *cli.Command) error {
 		args := c.Args()
 		d := c.Duration("delay")
+		filterPattern := c.String("log-filter")
+
+		sig, err := parseSignal(c.String("signal"))
+		if err != nil {
+			return cli.Exit(err.Error(), 1)
+		}
+		killSig = sig
+
+		var logFilter *regexp.Regexp
+		if filterPattern != "" && !c.Bool("tui") {
+			var err error
+			logFilter, err = regexp.Compile(filterPattern)
+			if err != nil {
+				return cli.Exit(fmt.Sprintf("invalid log-filter: %v", err), 1)
+			}
+		}
+
+		var (
+			lineCh   chan string
+			reloadCh chan struct{}
+		)
+		if c.Bool("tui") {
+			lineCh = make(chan string, 512)
+			reloadCh = make(chan struct{}, 1)
+			// redirect watcher log output into the TUI viewport
+			log.Logger = newLogger(&tuiLogWriter{ch: lineCh})
+		}
+
 		log.Info().
 			Str("version", appVersion).
 			Int("pid", os.Getpid()).
 			Strs("command", args.Slice()).
 			Msgf("watching command")
 
-		go runFileWatcher(ctx, Config{
-			Duration: d,
-			Name:     args.First(),
-			Args:     args.Tail(),
-		})
-		killSignal(ctx)
+		cfg := Config{
+			Duration:  d,
+			Name:      args.First(),
+			Args:      args.Tail(),
+			LogFilter: logFilter,
+			LineCh:    lineCh,
+			ReloadCh:  reloadCh,
+		}
 
-		return nil
-	},
-}
+		go runFileWatcher(ctx, cfg)
 
-var commandCmd = &cli.Command{
-	Aliases: []string{"cmd"},
-	Name:    "command",
-	Flags: []cli.Flag{
-		&cli.DurationFlag{
-			Aliases: []string{"n", "d"},
-			Name:    "duration",
-			Value:   time.Second,
-			Usage:   "set ticker duration",
-		},
-	},
-	Before: validateArgs,
-	Action: func(ctx context.Context, c *cli.Command) error {
-		args := c.Args()
-		d := c.Duration("duration")
-		log.Info().
-			Str("version", appVersion).
-			Int("pid", os.Getpid()).
-			Dur("duration", d).
-			Strs("command", args.Slice()).
-			Msgf("watching command")
-
-		go runCommandWatcher(ctx, Config{
-			Duration: d,
-			Name:     args.First(),
-			Args:     args.Tail(),
-		})
-		killSignal(ctx)
+		if lineCh != nil {
+			runTUI(ctx, lineCh, reloadCh, filterPattern)
+		} else {
+			killSignal(ctx)
+		}
 
 		return nil
 	},
@@ -180,24 +183,25 @@ var rootCmd = &cli.Command{
 
 				return context.WithValue(ctx, envFilesKey{}, envFiles), nil
 			},
-			Commands: []*cli.Command{fileCmd, commandCmd},
+			Commands: []*cli.Command{fileCmd},
 		},
 	},
 }
 
 func getEnvFiles(files []string) []string {
-	for i, file := range files {
+	out := make([]string, 0, len(files))
+	for _, file := range files {
 		if file == "off" {
 			return nil
 		}
 		dir := filepath.Dir(file)
 		base := filepath.Base(file)
 		if base == "." {
-			files[i] = filepath.Join(dir, ".env")
+			file = filepath.Join(dir, ".env")
 		}
+		out = append(out, file)
 	}
-
-	return files
+	return out
 }
 
 func validateArgs(ctx context.Context, c *cli.Command) (context.Context, error) {

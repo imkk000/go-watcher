@@ -1,155 +1,151 @@
 package main
 
 import (
-	"regexp"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
 
-func TestParsePatterns(t *testing.T) {
-	ps := parsePatterns([]string{
-		"-w:.vscode",
-		"+w:.git",
-		"w:.DS_Store",
-	})
-
-	want := []Pattern{
-		{Wildcard: true, Value: ".git"},
-		{IsExclude: true, Wildcard: true, Value: ".vscode"},
-		{Wildcard: true, Value: ".DS_Store"},
-	}
-	assert.Equal(t, want, ps)
-}
-
-func TestJoinPipe(t *testing.T) {
-	s := joinPipe([]string{".git", ".vscode", ".DS_Store"})
-
-	assert.Equal(t, ".git|.vscode|.DS_Store", s)
-}
-
-func TestPatternMatch(t *testing.T) {
+func TestParseRule(t *testing.T) {
 	tcs := []struct {
+		name string
+		in   string
+		want Rule
+	}{
+		{
+			name: "plus glob",
+			in:   "+*.go",
+			want: Rule{Include: true, Glob: "*.go"},
+		},
+		{
+			name: "minus glob",
+			in:   "-**/build/**",
+			want: Rule{Include: false, Glob: "**/build/**"},
+		},
+		{
+			name: "default polarity is include",
+			in:   "*.go",
+			want: Rule{Include: true, Glob: "*.go"},
+		},
+		{
+			name: "builtin name include is default",
+			in:   "+go",
+			want: Rule{Name: "go", Include: true, Glob: "**/*.go"},
+		},
+		{
+			name: "builtin name override polarity",
+			in:   "-go",
+			want: Rule{Name: "go", Include: false, Glob: "**/*.go"},
+		},
+		{
+			name: "builtin git default exclude",
+			in:   "-git",
+			want: Rule{Name: "git", Include: false, Glob: "**/.git/**"},
+		},
+		{
+			name: "builtin git flipped to include",
+			in:   "+git",
+			want: Rule{Name: "git", Include: true, Glob: "**/.git/**"},
+		},
+	}
+	for _, tc := range tcs {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseRule(tc.in)
+			assert.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestParseRuleErrors(t *testing.T) {
+	cases := []string{"", "+", "-"}
+	for _, in := range cases {
+		t.Run(in, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := parseRule(in)
+			assert.Error(t, err)
+		})
+	}
+}
+
+func TestRuleMatch(t *testing.T) {
+	tcs := []struct {
+		name string
 		want bool
-		p    Pattern
+		r    Rule
 		s    string
 	}{
-		{
-			want: false,
-			p:    Pattern{Wildcard: true, Value: "!(script)"},
-			s:    "script",
-		},
-		{
-			want: true,
-			p:    Pattern{Wildcard: true, Value: "**/gen/**"},
-			s:    "gen",
-		},
-		{
-			want: false,
-			p:    Pattern{Regex: regexp.MustCompile(`.+\.go$`)},
-			s:    "a/b/c/d/f/g/h/test.go.bak",
-		},
-		{
-			want: true,
-			p:    Pattern{Regex: regexp.MustCompile(`.+\.go$`)},
-			s:    "a/b/c/d/f/g/h/test.go",
-		},
-		{
-			want: true,
-			p:    Pattern{Wildcard: true, Value: "**/.git/**"},
-			s:    ".git",
-		},
-		{
-			want: true,
-			p:    Pattern{Wildcard: true, Value: ".git"},
-			s:    ".git",
-		},
-		{
-			want: true,
-			p:    Pattern{Wildcard: true, Value: "src/**/*.js"},
-			s:    "src/a/b/background.js",
-		},
-		{
-			want: true,
-			p:    Pattern{Wildcard: true, Value: "**/gen*/**"},
-			s:    "generate/client/main.go",
-		},
-		{
-			want: true,
-			p:    Pattern{Wildcard: true, Value: "script/**"},
-			s:    "script/client/main.go",
-		},
-		{
-			want: true,
-			p:    Pattern{Wildcard: true, Value: "script/**"},
-			s:    "script/main.go",
-		},
-		{
-			want: false,
-			p:    Pattern{Wildcard: true, Value: "*.go"},
-			s:    "main.go.bak",
-		},
-		{
-			want: true,
-			p:    Pattern{Wildcard: true, Value: "**/*.go"},
-			s:    "cmd/main.go",
-		},
-		{
-			want: true,
-			p:    Pattern{Wildcard: true, Value: "*.go"},
-			s:    "main.go",
-		},
-		{
-			want: true,
-			p:    Pattern{Wildcard: true, Value: "**/.git"},
-			s:    "path/to/.git",
-		},
-		{
-			want: true,
-			p:    Pattern{Exact: true, Value: ".git"},
-			s:    ".git",
-		},
+		{name: "glob *.go matches main.go", want: true, r: Rule{Glob: "*.go"}, s: "main.go"},
+		{name: "glob *.go does not match .go.bak", want: false, r: Rule{Glob: "*.go"}, s: "main.go.bak"},
+		{name: "glob **/*.go matches nested", want: true, r: Rule{Glob: "**/*.go"}, s: "cmd/main.go"},
+		{name: "glob **/*.go matches flat", want: true, r: Rule{Glob: "**/*.go"}, s: "main.go"},
+		{name: "glob src/**/*.js matches deep js", want: true, r: Rule{Glob: "src/**/*.js"}, s: "src/a/b/c.js"},
+		{name: "glob **/.git/** matches inside", want: true, r: Rule{Glob: "**/.git/**"}, s: ".git/HEAD"},
 	}
 	for _, tc := range tcs {
-		t.Run(tc.s, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			assert.Equal(t, tc.want, tc.p.Match(tc.s))
+			assert.Equal(t, tc.want, tc.r.Match(tc.s))
 		})
 	}
 }
 
-func TestParsePattern(t *testing.T) {
-	tcs := []struct {
-		want Pattern
-		s    string
-	}{
-		{
-			want: Pattern{Wildcard: true, Value: ".git"},
-			s:    `+w:.git`,
-		},
-		{
-			want: Pattern{IsExclude: true, Wildcard: true, Value: ".git"},
-			s:    `-w:.git`,
-		},
-		{
-			want: Pattern{Wildcard: true, Value: ".git"},
-			s:    `w:.git`,
-		},
-		{
-			want: Pattern{Exact: true, Value: ".git"},
-			s:    `e:.git`,
-		},
-		{
-			want: Pattern{Regex: regexp.MustCompile(`\.git`)},
-			s:    `r:\.git`,
-		},
-	}
-	for _, tc := range tcs {
-		t.Run(tc.s, func(t *testing.T) {
-			t.Parallel()
+func TestMergeRulesNoUserPreservesDefaults(t *testing.T) {
+	rules := mergeRules(nil)
+	assert.Equal(t, len(builtinRules), len(rules))
+}
 
-			assert.Equal(t, tc.want, parsePattern(tc.s))
-		})
+func TestMergeRulesNamedOverrideFlipsInPlace(t *testing.T) {
+	flip, err := parseRule("-go")
+	assert.NoError(t, err)
+
+	rules := mergeRules([]Rule{flip})
+	assert.Equal(t, len(builtinRules), len(rules), "user override must not change rule count")
+
+	var found bool
+	for _, r := range rules {
+		if r.Name == "go" {
+			found = true
+			assert.False(t, r.Include, "go must now be exclude")
+		}
 	}
+	assert.True(t, found, "go rule must still be present")
+}
+
+func TestMergeRulesUnnamedAppended(t *testing.T) {
+	r, err := parseRule("+*.proto")
+	assert.NoError(t, err)
+
+	rules := mergeRules([]Rule{r})
+	assert.Equal(t, len(builtinRules)+1, len(rules))
+
+	var found bool
+	for _, rule := range rules {
+		if rule.Glob == "*.proto" && rule.Include {
+			found = true
+		}
+	}
+	assert.True(t, found)
+}
+
+func TestMatchRulesExcludeWins(t *testing.T) {
+	rules := mergeRules(nil)
+	// .git/HEAD is matched by both no include rule and the git exclude
+	assert.False(t, matchRules(".git/HEAD", rules))
+	// main.go is matched by go include and no exclude
+	assert.True(t, matchRules("main.go", rules))
+	// main.go inside .git is excluded because git exclude wins over go include
+	assert.False(t, matchRules(".git/main.go", rules))
+}
+
+func TestMatchRulesUserFlipExcludesGo(t *testing.T) {
+	flip, err := parseRule("-go")
+	assert.NoError(t, err)
+
+	rules := mergeRules([]Rule{flip})
+	assert.False(t, matchRules("main.go", rules))
 }
