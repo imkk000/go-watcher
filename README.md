@@ -48,7 +48,8 @@ Anything after `--` is the command to run (and re-run on changes).
 go-watcher
 ├── watch                   shared flags: --log-level, --env
 │   ├── file (alias: fs)    file watcher; flags: --match, --delay, --signal, --log-filter, --tui
-│   └── manual (alias: m)   no file watching; always TUI; reload only via /reload
+│   ├── manual (alias: m)   no file watching; always TUI; reload only via /reload
+│   └── tick (alias: t)     re-run command on an interval, in-place repaint (like watch(1))
 └── completion json         dump CLI structure as JSON (for hack-core)
 ```
 
@@ -68,6 +69,22 @@ go-watcher
 | `--signal`     | `-s`       | `SIGKILL`       | signal sent to the process on each reload                          |
 | `--log-filter` | `-f`       | (none)          | regex to filter subprocess output; only matching lines are printed |
 | `--tui`        |            | `false`         | launch the interactive TUI with a live filter search box           |
+
+### `watch tick` flags
+
+`tick` re-runs the command on a fixed interval and repaints the terminal in place — cursor goes to home, new output overwrites old, residue is cleared per line. No alt-screen flash. Behaves like `watch(1)` without the title bar.
+
+| flag         | aliases    | default | meaning                |
+| ------------ | ---------- | ------- | ---------------------- |
+| `--interval` | `-n`, `-i` | `1s`    | interval between runs  |
+
+```sh
+# refresh every second
+go-watcher watch tick -n 1s -- date
+
+# poll docker ps in place
+go-watcher watch t -- docker ps
+```
 
 ### `watch manual` flags
 

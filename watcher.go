@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -112,6 +114,45 @@ func walkDir(rootPath string, watcher *fsnotify.Watcher, rules []Rule) error {
 		log.Debug().Str("path", path).Msg("add path")
 		return watcher.Add(path)
 	})
+}
+
+// runTickWatcher repeatedly runs the command on an interval and repaints the
+// terminal in place — cursor-home + clear-to-end-of-line per row + clear-below
+// at the end. Same idea as unix watch(1) but without the alt-screen flash.
+func runTickWatcher(ctx context.Context, c Config, interval time.Duration) {
+	tickRun(ctx, c)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			tickRun(ctx, c)
+		}
+	}
+}
+
+func tickRun(ctx context.Context, c Config) {
+	envs, err := readEnvs(ctx)
+	if err != nil {
+		log.Error().Err(err).Msg("read environment")
+	}
+
+	var buf bytes.Buffer
+	cmd := exec.CommandContext(ctx, c.Name, c.Args...)
+	cmd.Env = envs
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	_ = cmd.Run() // exit status is intentionally ignored, like watch(1)
+
+	// per-line tail clear so a shorter new line doesn't leave residue
+	out := bytes.ReplaceAll(buf.Bytes(), []byte("\n"), []byte("\x1b[K\n"))
+
+	// move cursor home, write the frame, clear residue below
+	os.Stdout.Write([]byte("\x1b[H"))
+	os.Stdout.Write(out)
+	os.Stdout.Write([]byte("\x1b[K\x1b[J"))
 }
 
 // runManualWatcher starts the process once and only restarts it when the TUI

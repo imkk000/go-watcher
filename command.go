@@ -124,6 +124,42 @@ var fileCmd = &cli.Command{
 	},
 }
 
+var tickCmd = &cli.Command{
+	Aliases: []string{"t"},
+	Name:    "tick",
+	Usage:   "re-run command on an interval, repainting in place (like watch(1))",
+	Flags: []cli.Flag{
+		&cli.DurationFlag{
+			Aliases: []string{"n", "i"},
+			Name:    "interval",
+			Value:   time.Second,
+			Usage:   "interval between runs",
+		},
+	},
+	Before: validateArgs,
+	Action: func(ctx context.Context, c *cli.Command) error {
+		args := c.Args()
+		interval := c.Duration("interval")
+
+		log.Info().
+			Str("version", appVersion).
+			Int("pid", os.Getpid()).
+			Dur("interval", interval).
+			Strs("command", args.Slice()).
+			Msgf("tick mode")
+
+		cfg := Config{
+			Name: args.First(),
+			Args: args.Tail(),
+		}
+
+		go runTickWatcher(ctx, cfg, interval)
+		killSignal(ctx)
+
+		return nil
+	},
+}
+
 var manualCmd = &cli.Command{
 	Aliases: []string{"m"},
 	Name:    "manual",
@@ -235,7 +271,7 @@ var rootCmd = &cli.Command{
 
 				return context.WithValue(ctx, envFilesKey{}, envFiles), nil
 			},
-			Commands: []*cli.Command{fileCmd, manualCmd},
+			Commands: []*cli.Command{fileCmd, manualCmd, tickCmd},
 		},
 	},
 }
