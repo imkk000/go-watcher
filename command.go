@@ -9,7 +9,7 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/imkk000/go-watcher/walkcmd"
+	"github.com/imkk000/hack-my-laziness/pkg/walkcmd"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/urfave/cli/v3"
