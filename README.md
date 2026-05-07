@@ -89,9 +89,9 @@ go-watcher watch t -- docker ps
 ### `watch manual` flags
 
 `manual` runs the command once in the TUI and never restarts it on file change.
-Use `/reload` from the TUI command bar when you want to rebuild — handy for
-slow rebuilds (Docker images, codegen, etc.) where automatic reload would be
-disruptive.
+Reload by pressing `Enter` on an empty input — or run `/reload` from the
+command bar — when you want to rebuild. Handy for slow rebuilds (Docker
+images, codegen, etc.) where automatic reload would be disruptive.
 
 | flag           | aliases | default   | meaning                                                              |
 | -------------- | ------- | --------- | -------------------------------------------------------------------- |

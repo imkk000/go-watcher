@@ -115,7 +115,7 @@ var fileCmd = &cli.Command{
 		go runFileWatcher(ctx, cfg)
 
 		if lineCh != nil {
-			runTUI(ctx, lineCh, reloadCh, filterPattern)
+			runTUI(ctx, lineCh, reloadCh, filterPattern, false)
 		} else {
 			killSignal(ctx)
 		}
@@ -206,7 +206,7 @@ var manualCmd = &cli.Command{
 		}
 
 		go runManualWatcher(ctx, cfg)
-		runTUI(ctx, lineCh, reloadCh, filterPattern)
+		runTUI(ctx, lineCh, reloadCh, filterPattern, true)
 
 		return nil
 	},

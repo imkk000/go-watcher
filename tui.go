@@ -50,19 +50,25 @@ type tuiModel struct {
 	activeSearch  string
 	searchMatches []matchPos
 	searchIdx     int
+	enterReloads  bool
 }
 
-func newTUIModel(lineCh <-chan string, reloadCh chan<- struct{}, initialFilter string) tuiModel {
+func newTUIModel(lineCh <-chan string, reloadCh chan<- struct{}, initialFilter string, enterReloads bool) tuiModel {
 	ti := textinput.New()
-	ti.Placeholder = "filter… (/cmd, ?search)"
+	if enterReloads {
+		ti.Placeholder = "filter… (Enter=reload, /cmd, ?search)"
+	} else {
+		ti.Placeholder = "filter… (/cmd, ?search)"
+	}
 	ti.SetValue(initialFilter)
 	ti.Focus()
 	ti.CharLimit = 300
 
 	return tuiModel{
-		lineCh:   lineCh,
-		reloadCh: reloadCh,
-		input:    ti,
+		lineCh:       lineCh,
+		reloadCh:     reloadCh,
+		input:        ti,
+		enterReloads: enterReloads,
 	}
 }
 
@@ -134,6 +140,13 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.searchIdx = 0
 				m.jumpToCurrentMatch()
 				m.refreshContent()
+				return m, nil
+			}
+			if m.enterReloads && m.input.Value() == "" && m.reloadCh != nil {
+				select {
+				case m.reloadCh <- struct{}{}:
+				default:
+				}
 				return m, nil
 			}
 
@@ -490,8 +503,8 @@ func (w *tuiWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func runTUI(ctx context.Context, lineCh chan string, reloadCh chan<- struct{}, initialFilter string) {
-	m := newTUIModel(lineCh, reloadCh, initialFilter)
+func runTUI(ctx context.Context, lineCh chan string, reloadCh chan<- struct{}, initialFilter string, enterReloads bool) {
+	m := newTUIModel(lineCh, reloadCh, initialFilter, enterReloads)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		log.Error().Err(err).Msg("tui error")

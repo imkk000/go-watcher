@@ -6,7 +6,7 @@ import (
 )
 
 var (
-	appVersion = "0.4.0"
+	appVersion = "0.4.1"
 	cmd        *exec.Cmd
 	killSig    syscall.Signal = syscall.SIGKILL
 )
