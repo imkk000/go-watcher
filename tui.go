@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -51,6 +52,8 @@ type tuiModel struct {
 	searchMatches []matchPos
 	searchIdx     int
 	enterReloads  bool
+	cmdHistory    []string
+	historyIdx    int // -1 = not navigating
 }
 
 func newTUIModel(lineCh <-chan string, reloadCh chan<- struct{}, initialFilter string, enterReloads bool) tuiModel {
@@ -63,12 +66,14 @@ func newTUIModel(lineCh <-chan string, reloadCh chan<- struct{}, initialFilter s
 	ti.SetValue(initialFilter)
 	ti.Focus()
 	ti.CharLimit = 300
+	ti.Cursor.SetMode(cursor.CursorStatic)
 
 	return tuiModel{
 		lineCh:       lineCh,
 		reloadCh:     reloadCh,
 		input:        ti,
 		enterReloads: enterReloads,
+		historyIdx:   -1,
 	}
 }
 
@@ -96,7 +101,7 @@ func waitForLine(ch <-chan string) tea.Cmd {
 }
 
 func (m tuiModel) Init() tea.Cmd {
-	return tea.Batch(textinput.Blink, waitForLine(m.lineCh))
+	return waitForLine(m.lineCh)
 }
 
 func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -149,6 +154,39 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
+
+		case "up":
+			if len(m.cmdHistory) == 0 {
+				return m, nil
+			}
+			if m.historyIdx == -1 {
+				m.historyIdx = len(m.cmdHistory) - 1
+			} else if m.historyIdx > 0 {
+				m.historyIdx--
+			}
+			m.input.SetValue(m.cmdHistory[m.historyIdx])
+			m.input.CursorEnd()
+			if m.ready {
+				m.viewport.SetContent(m.renderContent())
+			}
+			return m, nil
+
+		case "down":
+			if m.historyIdx == -1 {
+				return m, nil
+			}
+			m.historyIdx++
+			if m.historyIdx >= len(m.cmdHistory) {
+				m.historyIdx = -1
+				m.input.SetValue("")
+			} else {
+				m.input.SetValue(m.cmdHistory[m.historyIdx])
+			}
+			m.input.CursorEnd()
+			if m.ready {
+				m.viewport.SetContent(m.renderContent())
+			}
+			return m, nil
 
 		case "n":
 			if m.input.Value() == "" && len(m.searchMatches) > 0 {
@@ -208,6 +246,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	if newValue != prevValue {
 		m.cmdErr = ""
+		m.historyIdx = -1
 		if m.isSearchMode() {
 			m.recomputeMatches()
 			m.searchIdx = 0
@@ -229,6 +268,11 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m tuiModel) execCommand() (tuiModel, tea.Cmd) {
 	raw := strings.TrimSpace(m.input.Value())
 	cmd := strings.ToLower(strings.TrimPrefix(raw, "/"))
+
+	if raw != "" && (len(m.cmdHistory) == 0 || m.cmdHistory[len(m.cmdHistory)-1] != raw) {
+		m.cmdHistory = append(m.cmdHistory, raw)
+	}
+	m.historyIdx = -1
 
 	switch cmd {
 	case "reload":

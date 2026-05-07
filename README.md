@@ -233,6 +233,7 @@ The input box has three modes, selected by the first character you type:
 | `?` (first char) | search mode (label turns cyan); type a regex, hit `Enter` to commit                      |
 | `Enter`          | run command (command mode), or commit search (search mode)                               |
 | `n` / `N`        | jump to next / previous search match (only when input is empty and a search is active)   |
+| `Up` / `Down`    | recall previous / next submitted command from history                                    |
 | `Esc`            | clear input; if input is already empty, clear active search; if no search, quit          |
 | `Ctrl+C`         | quit                                                                                     |
 
