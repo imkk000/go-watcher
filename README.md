@@ -69,6 +69,7 @@ go-watcher
 | `--signal`     | `-s`       | `SIGKILL`       | signal sent to the process on each reload                          |
 | `--log-filter` | `-f`       | (none)          | regex to filter subprocess output; only matching lines are printed |
 | `--tui`        |            | `false`         | launch the interactive TUI with a live filter search box           |
+| `--shell`      | `-S`       | `false`         | run the command through `sh -c` so pipes/redirects/glob/env work   |
 
 ### `watch tick` flags
 
@@ -234,16 +235,19 @@ The input box has three modes, selected by the first character you type:
 | `Enter`          | run command (command mode), or commit search (search mode)                               |
 | `n` / `N`        | jump to next / previous search match (only when input is empty and a search is active)   |
 | `Up` / `Down`    | recall previous / next submitted command from history                                    |
-| `Esc`            | clear input; if input is already empty, clear active search; if no search, quit          |
+| `Esc`            | clear input → close help → clear active search                                           |
 | `Ctrl+C`         | quit                                                                                     |
+| Mouse wheel      | scroll the log viewport                                                                  |
 
 ### TUI commands
 
-| command            | action                                                |
-| ------------------ | ----------------------------------------------------- |
-| `/reload`          | immediately restart the watched process (no debounce) |
-| `/clear`           | clear the viewport (drops the buffered log history)   |
-| `/quit` (`/exit`)  | quit the TUI                                          |
+| command            | action                                                                            |
+| ------------------ | --------------------------------------------------------------------------------- |
+| `/reload`          | immediately restart the watched process (no debounce)                             |
+| `/clear`           | clear the viewport (drops the buffered log history)                               |
+| `/signal <NAME\|N>` | send a signal to the running process group; accepts a name (`KILL`, `TERM`, `HUP`, `INT`, `USR1`, `USR2`, `QUIT`) or its number (`1`, `2`, `3`, `9`, `10`, `12`, `15`) |
+| `/help`            | toggle the in-viewport help screen                                                |
+| `/quit` (`/exit`)  | quit the TUI                                                                      |
 
 ### Search
 
@@ -306,6 +310,19 @@ Slow down the debounce (useful when `go build` triggers cascading writes):
 
 ```sh
 go-watcher watch file --delay=2s -- go run .
+```
+
+Run a piped/shell command. Either escape the pipes so your shell passes them
+through literally (auto-detected), or wrap the whole thing in quotes with
+`--shell` / `-S`:
+
+```sh
+# auto-detected — `\|` keeps the pipe out of your parent shell
+go-watcher watch file -- echo test \| base64 \| pbcopy
+
+# explicit shell mode (also handles globs, $VAR expansion, &&, ;, etc.)
+go-watcher watch file --shell -- 'echo test | base64 | pbcopy'
+go-watcher watch file -S -- 'go test ./... && echo PASS'
 ```
 
 TUI with SIGTERM and a pre-set filter:

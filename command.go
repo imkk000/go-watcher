@@ -22,6 +22,7 @@ type Config struct {
 	LogFilter *regexp.Regexp
 	LineCh    chan string   // non-nil when TUI mode is active
 	ReloadCh  chan struct{} // non-nil when TUI mode is active
+	Shell     bool          // force exec via `sh -c <joined args>`
 }
 
 var fileCmd = &cli.Command{
@@ -53,6 +54,11 @@ var fileCmd = &cli.Command{
 			Name:    "signal",
 			Value:   "SIGKILL",
 			Usage:   "signal sent to process on reload: SIGKILL, SIGTERM, SIGHUP, SIGINT",
+		},
+		&cli.BoolFlag{
+			Aliases: []string{"S"},
+			Name:    "shell",
+			Usage:   "run the command through `sh -c` so pipes/redirects/glob/env work",
 		},
 	},
 	Before: func(ctx context.Context, c *cli.Command) (context.Context, error) {
@@ -110,6 +116,7 @@ var fileCmd = &cli.Command{
 			LogFilter: logFilter,
 			LineCh:    lineCh,
 			ReloadCh:  reloadCh,
+			Shell:     c.Bool("shell"),
 		}
 
 		go runFileWatcher(ctx, cfg)
@@ -135,6 +142,11 @@ var tickCmd = &cli.Command{
 			Value:   time.Second,
 			Usage:   "interval between runs",
 		},
+		&cli.BoolFlag{
+			Aliases: []string{"S"},
+			Name:    "shell",
+			Usage:   "run the command through `sh -c` so pipes/redirects/glob/env work",
+		},
 	},
 	Before: validateArgs,
 	Action: func(ctx context.Context, c *cli.Command) error {
@@ -149,8 +161,9 @@ var tickCmd = &cli.Command{
 			Msgf("tick mode")
 
 		cfg := Config{
-			Name: args.First(),
-			Args: args.Tail(),
+			Name:  args.First(),
+			Args:  args.Tail(),
+			Shell: c.Bool("shell"),
 		}
 
 		go runTickWatcher(ctx, cfg, interval)
@@ -175,6 +188,11 @@ var manualCmd = &cli.Command{
 			Name:    "signal",
 			Value:   "SIGKILL",
 			Usage:   "signal sent to process on reload: SIGKILL, SIGTERM, SIGHUP, SIGINT",
+		},
+		&cli.BoolFlag{
+			Aliases: []string{"S"},
+			Name:    "shell",
+			Usage:   "run the command through `sh -c` so pipes/redirects/glob/env work",
 		},
 	},
 	Before: validateArgs,
@@ -203,6 +221,7 @@ var manualCmd = &cli.Command{
 			Args:     args.Tail(),
 			LineCh:   lineCh,
 			ReloadCh: reloadCh,
+			Shell:    c.Bool("shell"),
 		}
 
 		go runManualWatcher(ctx, cfg)

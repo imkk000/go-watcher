@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -49,6 +50,34 @@ func killProcess() {
 	}
 }
 
+// buildExec returns the (name, args) pair to pass to exec.Command. If the user
+// asked for shell mode, or any argument contains a shell metacharacter
+// (`|`, `<`, `>`, `;`), the whole command line is joined and run via `sh -c`.
+// That's what makes things like `echo x | base64 | pbcopy` work.
+func buildExec(c Config) (string, []string) {
+	if !c.Shell && !hasShellMeta(c.Name, c.Args) {
+		return c.Name, c.Args
+	}
+	parts := append([]string{c.Name}, c.Args...)
+	return "sh", []string{"-c", strings.Join(parts, " ")}
+}
+
+func hasShellMeta(name string, args []string) bool {
+	if strings.ContainsAny(name, "|<>;") {
+		return true
+	}
+	for _, a := range args {
+		if strings.ContainsAny(a, "|<>;") {
+			return true
+		}
+		// `&&` / `&` only as standalone tokens, to avoid false positives in URLs.
+		if a == "&&" || a == "&" {
+			return true
+		}
+	}
+	return false
+}
+
 func parseSignal(s string) (syscall.Signal, error) {
 	switch strings.ToUpper(strings.TrimPrefix(strings.ToUpper(s), "SIG")) {
 	case "KILL":
@@ -59,9 +88,22 @@ func parseSignal(s string) (syscall.Signal, error) {
 		return syscall.SIGHUP, nil
 	case "INT":
 		return syscall.SIGINT, nil
-	default:
-		return 0, fmt.Errorf("unsupported signal %q: must be SIGKILL, SIGTERM, SIGHUP, or SIGINT", s)
+	case "USR1":
+		return syscall.SIGUSR1, nil
+	case "USR2":
+		return syscall.SIGUSR2, nil
+	case "QUIT":
+		return syscall.SIGQUIT, nil
 	}
+	if n, err := strconv.Atoi(strings.TrimSpace(s)); err == nil {
+		sig := syscall.Signal(n)
+		switch sig {
+		case syscall.SIGHUP, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGKILL,
+			syscall.SIGTERM, syscall.SIGUSR1, syscall.SIGUSR2:
+			return sig, nil
+		}
+	}
+	return 0, fmt.Errorf("unsupported signal %q: must be a name (KILL, TERM, HUP, INT, USR1, USR2, QUIT) or its number (1, 2, 3, 9, 10, 12, 15)", s)
 }
 
 // filteredWriter buffers subprocess output and only forwards lines matching filter.
@@ -115,7 +157,8 @@ func startProcess(ctx context.Context, c Config) {
 		}
 	}
 
-	cmd = exec.Command(c.Name, c.Args...)
+	name, args := buildExec(c)
+	cmd = exec.Command(name, args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = out
 	cmd.Stderr = out
@@ -123,7 +166,9 @@ func startProcess(ctx context.Context, c Config) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		log.Error().Err(err).Msg("start command")
+		return
 	}
+	setProcStarted(cmd.Process.Pid)
 	log.Info().Msgf("started (%d)", cmd.Process.Pid)
 }
 

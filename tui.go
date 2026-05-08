@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"syscall"
 
 	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -28,6 +29,9 @@ var (
 	matchStyle         = lipgloss.NewStyle().Background(lipgloss.Color("226")).Foreground(lipgloss.Color("0"))
 	currentMatchStyle  = lipgloss.NewStyle().Background(lipgloss.Color("208")).Foreground(lipgloss.Color("0")).Bold(true)
 	searchStatusStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("117"))
+	statusBarStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	helpHeaderStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+	helpSectionStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("117")).Bold(true)
 )
 
 type newLineMsg struct{ line string }
@@ -54,6 +58,7 @@ type tuiModel struct {
 	enterReloads  bool
 	cmdHistory    []string
 	historyIdx    int // -1 = not navigating
+	showHelp      bool
 }
 
 func newTUIModel(lineCh <-chan string, reloadCh chan<- struct{}, initialFilter string, enterReloads bool) tuiModel {
@@ -67,6 +72,7 @@ func newTUIModel(lineCh <-chan string, reloadCh chan<- struct{}, initialFilter s
 	ti.Focus()
 	ti.CharLimit = 300
 	ti.Cursor.SetMode(cursor.CursorStatic)
+	ti.PlaceholderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
 
 	return tuiModel{
 		lineCh:       lineCh,
@@ -120,7 +126,14 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.input.Value() != "" {
 				m.input.SetValue("")
 				m.cmdErr = ""
+				m.input.Focus()
 				m.recomputeMatches()
+				m.refreshContent()
+				return m, nil
+			}
+			if m.showHelp {
+				m.showHelp = false
+				m.input.Focus()
 				m.refreshContent()
 				return m, nil
 			}
@@ -128,10 +141,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.activeSearch = ""
 				m.searchMatches = nil
 				m.searchIdx = 0
+				m.input.Focus()
 				m.refreshContent()
 				return m, nil
 			}
-			return m, tea.Quit
+			m.input.Focus()
+			return m, nil
 
 		case "enter":
 			if m.isCommandMode() {
@@ -208,21 +223,24 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.WindowSizeMsg:
+		wasAtBottom := !m.ready || m.viewport.AtBottom()
 		m.width = msg.Width
 		m.height = msg.Height
-		vpHeight := m.height - 3
+		vpHeight := m.height - 4
 		if vpHeight < 1 {
 			vpHeight = 1
 		}
 		m.input.Width = m.width - 12
 		if !m.ready {
 			m.viewport = viewport.New(m.width, vpHeight)
-			m.viewport.SetContent(m.renderContent())
-			m.viewport.GotoBottom()
 			m.ready = true
 		} else {
 			m.viewport.Width = m.width
 			m.viewport.Height = vpHeight
+		}
+		m.viewport.SetContent(m.renderContent())
+		if wasAtBottom {
+			m.viewport.GotoBottom()
 		}
 
 	case newLineMsg:
@@ -230,7 +248,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.activeSearch != "" || m.isSearchMode() {
 			m.recomputeMatches()
 		}
-		if m.ready {
+		if m.ready && !m.showHelp {
 			atBottom := m.viewport.AtBottom()
 			m.viewport.SetContent(m.renderContent())
 			if atBottom {
@@ -247,6 +265,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if newValue != prevValue {
 		m.cmdErr = ""
 		m.historyIdx = -1
+		if m.showHelp {
+			m.showHelp = false
+		}
 		if m.isSearchMode() {
 			m.recomputeMatches()
 			m.searchIdx = 0
@@ -267,14 +288,20 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m tuiModel) execCommand() (tuiModel, tea.Cmd) {
 	raw := strings.TrimSpace(m.input.Value())
-	cmd := strings.ToLower(strings.TrimPrefix(raw, "/"))
 
 	if raw != "" && (len(m.cmdHistory) == 0 || m.cmdHistory[len(m.cmdHistory)-1] != raw) {
 		m.cmdHistory = append(m.cmdHistory, raw)
 	}
 	m.historyIdx = -1
 
-	switch cmd {
+	parts := strings.Fields(strings.TrimPrefix(raw, "/"))
+	if len(parts) == 0 {
+		return m, nil
+	}
+	name := strings.ToLower(parts[0])
+	args := parts[1:]
+
+	switch name {
 	case "reload":
 		m.input.SetValue("")
 		m.cmdErr = ""
@@ -292,10 +319,38 @@ func (m tuiModel) execCommand() (tuiModel, tea.Cmd) {
 			m.viewport.SetContent("")
 			m.viewport.GotoBottom()
 		}
+	case "signal":
+		if len(args) < 1 {
+			m.cmdErr = "usage: /signal <NAME>"
+			break
+		}
+		sig, err := parseSignal(args[0])
+		if err != nil {
+			m.cmdErr = err.Error()
+			break
+		}
+		if cmd == nil || cmd.Process == nil {
+			m.cmdErr = "no running process"
+			break
+		}
+		if err := syscall.Kill(-cmd.Process.Pid, sig); err != nil {
+			m.cmdErr = "kill: " + err.Error()
+			break
+		}
+		log.Info().Str("signal", sig.String()).Int("pid", cmd.Process.Pid).Msg("sent signal")
+		m.input.SetValue("")
+	case "help":
+		m.input.SetValue("")
+		m.cmdErr = ""
+		m.showHelp = !m.showHelp
+		if m.ready {
+			m.viewport.SetContent(m.renderContent())
+			m.viewport.GotoTop()
+		}
 	case "quit", "exit":
 		return m, tea.Quit
 	default:
-		m.cmdErr = "unknown command — available: /reload, /clear, /quit"
+		m.cmdErr = "unknown command — try /help"
 	}
 	return m, nil
 }
@@ -363,6 +418,9 @@ func (m *tuiModel) jumpToCurrentMatch() {
 }
 
 func (m tuiModel) renderContent() string {
+	if m.showHelp {
+		return helpText()
+	}
 	switch {
 	case m.isCommandMode():
 		// command mode shows everything unfiltered, no highlight
@@ -374,6 +432,35 @@ func (m tuiModel) renderContent() string {
 		// filter mode: hide non-matching lines
 		return m.renderLines(strings.TrimSpace(m.input.Value()), false)
 	}
+}
+
+func helpText() string {
+	lines := []string{
+		helpHeaderStyle.Render("go-watcher TUI — help"),
+		"",
+		helpSectionStyle.Render("Modes"),
+		"  type text          live regex filter (lines that don't match are hidden)",
+		"  ?<query>           search — highlights matches across the buffer; Enter commits",
+		"  /<command>         command mode; Enter runs",
+		"",
+		helpSectionStyle.Render("Commands"),
+		"  /reload            restart the watched process",
+		"  /clear             clear buffer and viewport",
+		"  /signal <NAME|N>   send a signal: KILL/9, TERM/15, HUP/1, INT/2, USR1/10, USR2/12, QUIT/3",
+		"  /help              toggle this help screen",
+		"  /quit  /exit       quit the TUI",
+		"",
+		helpSectionStyle.Render("Keys"),
+		"  Enter              run command, commit search, or reload (manual mode, empty input)",
+		"  n / N              next / previous search match",
+		"  Up / Down          recall previous / next submitted command",
+		"  Esc                clear input → close help → clear search",
+		"  Ctrl+C             quit",
+		"  Mouse wheel        scroll the log viewport",
+		"",
+		"  Press Esc or run /help again to close.",
+	}
+	return strings.Join(lines, "\n")
 }
 
 // renderLines renders m.lines. If filter is non-empty, lines that don't match
@@ -499,7 +586,14 @@ func (m tuiModel) View() string {
 	}
 
 	bar := filterBarStyle.Width(m.width - 2).Render(label + m.input.View() + hint)
-	return m.viewport.View() + "\n" + bar
+
+	status := procStatusString()
+	if status == "" {
+		status = "no process"
+	}
+	statusLine := " " + statusBarStyle.Render(status)
+
+	return m.viewport.View() + "\n" + statusLine + "\n" + bar
 }
 
 // tuiLogWriter sends zerolog output lines to the TUI channel so watcher
@@ -549,7 +643,7 @@ func (w *tuiWriter) Write(p []byte) (int, error) {
 
 func runTUI(ctx context.Context, lineCh chan string, reloadCh chan<- struct{}, initialFilter string, enterReloads bool) {
 	m := newTUIModel(lineCh, reloadCh, initialFilter, enterReloads)
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		log.Error().Err(err).Msg("tui error")
 	}

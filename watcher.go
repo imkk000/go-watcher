@@ -139,8 +139,9 @@ func tickRun(ctx context.Context, c Config) {
 		log.Error().Err(err).Msg("read environment")
 	}
 
+	name, args := buildExec(c)
 	var buf bytes.Buffer
-	cmd := exec.CommandContext(ctx, c.Name, c.Args...)
+	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Env = envs
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
