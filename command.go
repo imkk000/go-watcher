@@ -263,7 +263,8 @@ var rootCmd = &cli.Command{
 			},
 		},
 		{
-			Name: "watch",
+			Name:  "watch",
+			Usage: "Watch everything",
 			Flags: []cli.Flag{
 				&cli.StringFlag{
 					Name:  "log-level",
