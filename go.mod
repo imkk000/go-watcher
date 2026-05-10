@@ -8,7 +8,7 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/fsnotify/fsnotify v1.10.1
-	github.com/imkk000/hack-my-laziness v0.0.0-20260510071956-737164dd9c80
+	github.com/imkk000/hack-my-laziness v0.0.0-20260510120253-4ae1de318bc2
 	github.com/joho/godotenv v1.5.1
 	github.com/rs/zerolog v1.35.1
 	github.com/stretchr/testify v1.11.1

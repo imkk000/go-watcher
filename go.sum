@@ -32,6 +32,8 @@ github.com/imkk000/hack-my-laziness v0.0.0-20260507031940-e35b3c901ebc h1:eT0glg
 github.com/imkk000/hack-my-laziness v0.0.0-20260507031940-e35b3c901ebc/go.mod h1:+nt7C1beZhs2R5CQfoG8eSc86yg4XkVTfwOEEQgDRjo=
 github.com/imkk000/hack-my-laziness v0.0.0-20260510071956-737164dd9c80 h1:qlfKCtT0TTt62SaEBCHILIj3TZY6uAkXf2vOE8o0XUg=
 github.com/imkk000/hack-my-laziness v0.0.0-20260510071956-737164dd9c80/go.mod h1:qsIlvZjLvz9j0mxDD2aN2td6RbVVKUBJI/3aa2YTnbs=
+github.com/imkk000/hack-my-laziness v0.0.0-20260510120253-4ae1de318bc2 h1:B669MV42eJPiC4oti80aVCLW9Y+bHWxMTlacCmx4RUk=
+github.com/imkk000/hack-my-laziness v0.0.0-20260510120253-4ae1de318bc2/go.mod h1:2Md3cXSqvmRXYX1w/ruV3XY1e3mNN18DB3+rrLlcIVQ=
 github.com/joho/godotenv v1.5.1 h1:7eLL/+HRGLY0ldzfGMeQkb7vMd0as4CfYvUVzLqw0N0=
 github.com/joho/godotenv v1.5.1/go.mod h1:f4LDr5Voq0i2e/R5DDNOoa2zzDfwtkZa6DnEwAbqwq4=
 github.com/lucasb-eyer/go-colorful v1.4.0 h1:UtrWVfLdarDgc44HcS7pYloGHJUjHV/4FwW4TvVgFr4=
